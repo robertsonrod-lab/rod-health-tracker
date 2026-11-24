@@ -1,5 +1,5 @@
-const CACHE = 'health-tracker-v4';
-const ASSETS = ['./', 'index.html', 'styles.css?v=4', 'app.js?v=4', 'foods.json', 'manifest.json',
+const CACHE = 'health-tracker-v5';
+const ASSETS = ['./', 'index.html', 'styles.css?v=5', 'app.js?v=5', 'foods.json', 'manifest.json',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));

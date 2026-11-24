@@ -502,20 +502,75 @@ $('#fPhoto').addEventListener('change', async e => {
 });
 $('#fPhotoClear').addEventListener('click', () => setPhoto(null));
 function dataURLtoFile(d, name) {
-  const [h, b] = d.split(','); const mime = h.match(/:(.*?);/)[1]; const bin = atob(b);
-  const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return new File([arr], name, { type: mime });
+  if (!d || typeof d !== 'string' || !d.includes(',')) return null;
+  const [h, b] = d.split(',');
+  let bin;
+  try { bin = atob(b); } catch (e) { return null; }
+  if (!bin) return null;
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  const fname = /\.jpe?g$/i.test(name || '') ? name : 'meal.jpg';
+  return new File([arr], fname, { type: 'image/jpeg' });
 }
-async function sharePhoto(file, label) {
-  const text = `Health Bot, please estimate the calories and protein for this meal${label ? ' (' + label + ')' : ''}.`;
+function jpegShareFile(photoData, fallbackFile) {
+  // Always prefer a JPEG built from the stored data URL. The original camera file on
+  // iPhone is often HEIC, which many share targets (including chat apps) drop.
+  const fromData = dataURLtoFile(typeof photoData === 'string' ? photoData : (photoData && photoData.photo), 'meal.jpg');
+  if (fromData && fromData.size) return fromData;
+  if (fallbackFile && fallbackFile.size && /^image\/jpe?g$/i.test(fallbackFile.type || '')) {
+    return fallbackFile.type === 'image/jpeg' && /\.jpe?g$/i.test(fallbackFile.name || '')
+      ? fallbackFile
+      : new File([fallbackFile], 'meal.jpg', { type: 'image/jpeg' });
+  }
+  return null;
+}
+function mealShareText(item, label) {
+  const name = (item && item.item) || label || '';
+  let s = 'Health Bot, please estimate the calories and protein for this meal';
+  if (name) s += ' (' + name + ')';
+  if (item && item.date) s += ' on ' + item.date + (item.time ? ' at ' + item.time : '');
+  if (item && item.mealId) s += '. Meal id: ' + item.mealId;
+  s += '. Reply with the estimate and the HB1 paste code.';
+  return s;
+}
+function sharePhoto(file, itemOrLabel) {
+  // Not async: navigator.share must start in the same user-gesture turn as the tap.
+  // An await (or even an async function's first microtask on some iOS versions) causes NotAllowedError.
+  const item = itemOrLabel && typeof itemOrLabel === 'object' ? itemOrLabel : null;
+  const label = item ? item.item : itemOrLabel;
+  const text = mealShareText(item, label);
+  if (!file || !file.size) {
+    toast('That photo could not be attached. Add it again, or send it to Health Bot in chat.');
+    return false;
+  }
+  if (file.type !== 'image/jpeg' || !/\.jpe?g$/i.test(file.name || '')) {
+    file = new File([file], 'meal.jpg', { type: 'image/jpeg' });
+  }
+  if (typeof navigator.share !== 'function') {
+    toast('Sharing isn\'t available here. Send the photo to Health Bot in chat.');
+    return false;
+  }
+  const payload = { files: [file], title: 'Meal photo for Health Bot', text };
+  // iOS canShare({ files }) is unreliable for constructed Files; still attempt the share.
+  // Never fall back to text-only — that would drop the image.
   try {
-    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text }); return; }
-  } catch (err) { if (err && err.name === 'AbortError') return; }
-  toast('Sharing isn\'t available here. Save the photo and send it to Health Bot in chat.');
+    const p = navigator.share(payload);
+    if (p && typeof p.then === 'function') {
+      p.catch(err => {
+        if (!err || err.name === 'AbortError') return;
+        toast('Could not share the photo. In the share sheet, pick the Grok Bot app and the Health Bot chat, or send the photo here in chat.');
+      });
+    }
+    return true;
+  } catch (err) {
+    if (err && err.name === 'AbortError') return false;
+    toast('Could not share the photo. Send it to Health Bot in chat.');
+    return false;
+  }
 }
 $('#fShareBtn').addEventListener('click', () => {
   if (!fPhotoData) return;
-  sharePhoto(fPhotoFile || dataURLtoFile(fPhotoData, 'meal.jpg'), $('#fForm').item.value);
+  sharePhoto(jpegShareFile(fPhotoData, fPhotoFile), { item: $('#fForm').item.value, date: $('#fForm').date && $('#fForm').date.value });
 });
 
 function hideSuggest() { const el = $('#fSuggest'); if (el) el.hidden = true; }
@@ -716,7 +771,7 @@ $('#tab-food').addEventListener('click', e => {
     $('#fFormTitle').textContent = 'Edit food'; $('[data-cancel]', f).hidden = false; f.scrollIntoView({ behavior: 'smooth' });
   }
   if (del) { const i = S.food.find(x => x.id === del.dataset.fdel); if (i && confirm(`Delete "${i.item}"?`)) { S.food = S.food.filter(x => x !== i); save(); renderAll(); } }
-  if (sh) { const i = S.food.find(x => x.id === sh.dataset.fshare); if (i && i.photo) sharePhoto(lastPhotoFile && lastPhotoFile.id === i.id ? lastPhotoFile.file : dataURLtoFile(i.photo, 'meal.jpg'), i.item); }
+  if (sh) { const i = S.food.find(x => x.id === sh.dataset.fshare); if (i && i.photo) sharePhoto(jpegShareFile(i, lastPhotoFile && lastPhotoFile.id === i.id ? lastPhotoFile.file : null), i); }
 });
 
 /* ========== MY FOODS (database) + suggestions ========== */
@@ -840,7 +895,7 @@ $('#mealPhoto').addEventListener('change', async e => {
     const entry = { id: uid(), mealId: uid(), date, time: date === todayISO() ? nowTime() : '', item: 'Meal photo', cal: null, protein: null, source: 'estimate', photo, pending: true };
     S.food.push(entry);
     if (!save()) { S.food.pop(); return; }
-    lastPhotoFile = { id: entry.id, file };
+    lastPhotoFile = { id: entry.id, file: dataURLtoFile(photo, 'meal.jpg') || file };
     renderAll();
     toast('Photo meal saved, awaiting estimate. Tap "Send photo to Health Bot" on it.');
   } catch (err) { toast(err.message); }
@@ -1023,7 +1078,7 @@ on('#pasteItems', 'input', e => {
 $('#pasteSave').addEventListener('click', () => { if (pasteParsed) applyCode(pasteParsed, $('#pasteTarget').value || null); });
 $('#pasteCancel').addEventListener('click', () => { $('#pastePanel').hidden = true; pasteParsed = null; if ($('#pasteItems')) $('#pasteItems').innerHTML = ''; });
 window.HB = { parseHB, makeHB };
-window.HT = { scaleFood, foodByName, foodById, migrateFoodsFromLog, allCatalog, foodKey, defaultAmount, parseHB, makeHB, scaleHBItem, suggestFoods, get builtins() { return BUILTIN_FOODS; }, get state() { return S; } };
+window.HT = { scaleFood, foodByName, foodById, migrateFoodsFromLog, allCatalog, foodKey, defaultAmount, parseHB, makeHB, scaleHBItem, suggestFoods, dataURLtoFile, jpegShareFile, mealShareText, sharePhoto, get builtins() { return BUILTIN_FOODS; }, get state() { return S; } };
 
 /* ========== DEFICIT ========== */
 function weightOn(iso) {
