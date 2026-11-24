@@ -16,6 +16,16 @@ const ACTIVITY = {
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+function on(sel, ev, fn) {
+  const n = typeof sel === 'string' ? $(sel) : sel;
+  if (n) n.addEventListener(ev, fn);
+  return n;
+}
+function setHidden(sel, hide) {
+  const n = typeof sel === 'string' ? $(sel) : sel;
+  if (n) n.hidden = !!hide;
+  return n;
+}
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : NaN; };
@@ -476,7 +486,7 @@ function setPhoto(data, file) {
   fPhotoData = data; fPhotoFile = file || null;
   const th = $('#fThumb'); th.hidden = !data; if (data) th.src = data;
   $('#fPhotoClear').hidden = !data; $('#fPhotoHint').hidden = !data;
-  $('#fShareBtn').hidden = !data;
+  setHidden('#fShareBtn', !data);
   $('#fPhotoBtn').textContent = data ? '📷 Change photo' : '📷 Add meal photo';
 }
 $('#fPhotoBtn').addEventListener('click', () => $('#fPhoto').click());
@@ -544,8 +554,8 @@ function selectFood(fd, fill = true) {
   const d = defaultAmount(fd);
   f.amt.value = d.amt;
   f.amtUnit.value = d.unit;
-  f.calMode.value = fd.basis === '100' ? '100' : fd.basis === 'unit' ? 'unit' : 'serving';
-  $('#fCustomiseBtn').hidden = isPersonalFood(fd);
+  if (f.calMode) f.calMode.value = fd.basis === '100' ? '100' : fd.basis === 'unit' ? 'unit' : 'serving';
+  setHidden('#fCustomiseBtn', isPersonalFood(fd));
   hideSuggest();
   if (fill) fillFromFood();
   else updateFoodHint();
@@ -570,7 +580,7 @@ function updateFoodHint() {
   if (fSel) el.textContent = `${isPersonalFood(fSel) ? 'From My foods' : 'Typical values'}: ${foodSummary(fSel)}. Change the amount to scale calories. You can still adjust the numbers.`;
   else {
     const f = $('#fForm');
-    const mode = f.calMode.value;
+    const mode = f.calMode ? f.calMode.value : 'total';
     el.textContent = mode === 'total'
       ? 'Type the total calories you ate. Amount is optional, and is stored so you can change it later.'
       : 'Enter the label value (e.g. 250 cal per 100 g) and how much you ate. The total updates below.';
@@ -587,7 +597,7 @@ function updateLiveCal() {
       return;
     }
   }
-  if (!fSel && f.calMode.value !== 'total' && Number.isFinite(amt) && amt > 0) {
+  if (!fSel && f.calMode && f.calMode.value !== 'total' && Number.isFinite(amt) && amt > 0) {
     const v = manualScaled();
     if (v && Number.isFinite(v.cal)) {
       el.textContent = `${r2(amt)} ${f.amtUnit.value} = ${fmtN(v.cal)} cal (${fmtN(v.cal * KJ)} kJ)${Number.isFinite(v.protein) ? `, ${r2(v.protein)} g protein` : ''}`;
@@ -597,7 +607,7 @@ function updateLiveCal() {
   el.textContent = '';
 }
 function manualScaled() {
-  const f = $('#fForm'), mode = f.calMode.value, amt = num(f.amt.value);
+  const f = $('#fForm'), mode = f.calMode ? f.calMode.value : 'total', amt = num(f.amt.value);
   const cal = num(f.cal.value), protein = num(f.protein.value);
   if (mode === 'total' || !Number.isFinite(amt) || amt <= 0) return { cal: Number.isFinite(cal) ? cal : null, protein: Number.isFinite(protein) ? protein : null, factor: 1, labelCal: cal, labelProtein: protein, base: amt, unit: f.amtUnit.value };
   let base = mode === '100' ? 100 : mode === 'unit' ? 1 : (num(f.svSize && f.svSize.value) > 0 ? num(f.svSize.value) : 1);
@@ -614,15 +624,16 @@ function manualScaled() {
 function updateSaveRow() {
   const f = $('#fForm');
   $('#fSaveRow').hidden = !!fSel || !!fEditId || !f.item.value.trim();
-  $('#fCustomiseBtn').hidden = !fSel || isPersonalFood(fSel);
+  setHidden('#fCustomiseBtn', !fSel || isPersonalFood(fSel));
 }
 
 function resetFoodForm() {
   fEditId = null; const f = $('#fForm'); f.reset(); f.date.value = $('#fDay').value || todayISO(); f.source.value = 'label';
-  f.calMode.value = 'total'; f.amtUnit.innerHTML = '<option value="g">g</option><option value="ml">ml</option><option value="piece">piece</option><option value="serving">serves</option>';
+  if (f.calMode) if (f.calMode) f.calMode.value = 'total';
+  if (f.amtUnit) f.amtUnit.innerHTML = '<option value="g">g</option><option value="ml">ml</option><option value="piece">piece</option><option value="serving">serves</option>';
   f.amt.value = ''; f.amtUnit.value = 'g';
   setPhoto(null); $('#fFormTitle').textContent = 'Add food'; $('[data-cancel]', f).hidden = true;
-  fSel = null; mfFromBuiltin = false; $('#fCustomiseBtn').hidden = true; $('#fSaveFields').hidden = true;
+  fSel = null; mfFromBuiltin = false; setHidden('#fCustomiseBtn', true); setHidden('#fSaveFields', true);
   hideSuggest(); updateSaveRow(); updateFoodHint(); updateLiveCal();
 }
 $('#fForm').addEventListener('submit', e => {
@@ -633,13 +644,13 @@ $('#fForm').addEventListener('submit', e => {
   let basisCal = null, basisProtein = null, basisQty = null, basisUnit = null;
   if (fSel && Number.isFinite(amt)) {
     const v = scaleFood(fSel, amt, f.amtUnit.value);
-    if (Number.isFinite(v.cal) && f.calMode.value !== 'total') {
+    if (Number.isFinite(v.cal) && f.calMode && f.calMode.value !== 'total') {
       // fields already hold computed totals from fillFromFood; use the field if the user overrode them
     }
     cal = Number.isFinite(cal) ? cal : v.cal;
     protein = Number.isFinite(protein) ? protein : v.protein;
     basisCal = fSel.cal; basisProtein = fSel.protein; basisQty = basisAmount(fSel); basisUnit = fSel.unit;
-  } else if (f.calMode.value !== 'total' && Number.isFinite(amt)) {
+  } else if (f.calMode && f.calMode.value !== 'total' && Number.isFinite(amt)) {
     const v = manualScaled();
     cal = v.cal; protein = v.protein;
     basisCal = v.labelCal; basisProtein = v.labelProtein; basisQty = v.base; basisUnit = v.unit;
@@ -661,9 +672,9 @@ $('#fForm').addEventListener('submit', e => {
     const sv = num(f.svSize.value) > 0 ? num(f.svSize.value) : (Number.isFinite(amt) && amt > 0 ? amt : 1);
     const nf = normaliseFoodDef({ id: uid(), name: rec.item, servingSize: sv, unit: f.svUnit.value, basis: 'serving', cal: rec.cal, protein: rec.protein, fat: null, carbs: null, source: rec.source === 'label' ? 'label' : 'estimate' });
     // If they entered per-basis values, store those instead.
-    if (f.calMode.value !== 'total' && Number.isFinite(basisCal)) {
-      nf.basis = f.calMode.value === '100' ? '100' : (f.calMode.value === 'unit' ? 'unit' : 'serving');
-      nf.cal = basisCal; nf.protein = basisProtein; nf.servingSize = f.calMode.value === '100' ? sv : (f.calMode.value === 'unit' ? 1 : sv);
+    if (f.calMode && f.calMode.value !== 'total' && Number.isFinite(basisCal)) {
+      nf.basis = f.calMode && f.calMode.value === '100' ? '100' : (f.calMode && f.calMode.value === 'unit' ? 'unit' : 'serving');
+      nf.cal = basisCal; nf.protein = basisProtein; nf.servingSize = f.calMode && f.calMode.value === '100' ? sv : (f.calMode && f.calMode.value === 'unit' ? 1 : sv);
       nf.unit = f.svUnit.value || (f.amtUnit.value === 'serving' ? 'piece' : f.amtUnit.value);
     }
     S.foods.push(nf); rec.foodId = nf.id; savedFood = ' Added to My foods.';
@@ -677,7 +688,7 @@ $('#fForm').addEventListener('submit', e => {
   toast(`Saved. ${t.hasCal ? 'Day total ' + fmtN(t.cal) + ' cal (' + fmtN(t.cal * KJ) + ' kJ).' : ''}${savedFood}`);
 });
 $('#fForm [data-cancel]').addEventListener('click', resetFoodForm);
-$('#fList').addEventListener('click', e => {
+$('#tab-food').addEventListener('click', e => {
   const ed = e.target.closest('[data-fedit]'), del = e.target.closest('[data-fdel]'), sh = e.target.closest('[data-fshare]');
   if (ed) {
     const i = S.food.find(x => x.id === ed.dataset.fedit); if (!i) return;
@@ -698,7 +709,7 @@ $('#fList').addEventListener('click', e => {
       f.protein.value = Number.isFinite(i.protein) ? i.protein : f.protein.value;
       updateFoodHint(); updateLiveCal();
     } else {
-      fSel = null; f.calMode.value = 'total';
+      fSel = null; if (f.calMode) f.calMode.value = 'total';
       if (Number.isFinite(i.qty)) { f.amt.value = i.qty; f.amtUnit.value = i.qtyUnit || 'g'; }
       updateSaveRow(); updateFoodHint(); updateLiveCal();
     }
@@ -726,7 +737,7 @@ $('#fForm').item.addEventListener('keydown', e => {
   }
 });
 document.addEventListener('click', e => { if (!e.target.closest('.suggest-wrap')) hideSuggest(); });
-$('#fSuggest').addEventListener('click', e => {
+on('#fSuggest', 'click', e => {
   const b = e.target.closest('[data-sugg]'); if (b) pickSuggest(b.dataset.sugg);
 });
 function pickSuggest(id) {
@@ -735,8 +746,8 @@ function pickSuggest(id) {
 }
 function fSelClearPartial() {
   const f = $('#fForm');
-  f.calMode.value = 'total';
-  $('#fCustomiseBtn').hidden = true;
+  if (f.calMode) f.calMode.value = 'total';
+  setHidden('#fCustomiseBtn', true);
   updateFoodHint(); updateLiveCal();
 }
 $('#fForm').amt.addEventListener('input', () => { if (fSel) fillFromFood(); else updateLiveCal(); });
@@ -750,9 +761,9 @@ $('#fForm').amtUnit.addEventListener('change', e => {
   f.amtUnit._prev = e.target.value;
   if (fSel) fillFromFood(); else updateLiveCal();
 });
-$('#fForm').calMode.addEventListener('change', () => { updateFoodHint(); updateLiveCal(); });
+on($('#fForm') && $('#fForm').calMode, 'change', () => { updateFoodHint(); updateLiveCal(); });
 $('#fForm').saveFood.addEventListener('change', e => { $('#fSaveFields').hidden = !e.target.checked; });
-$('#fCustomiseBtn').addEventListener('click', () => { if (fSel) openMfForm(fSel, { fromBuiltin: !isPersonalFood(fSel) }); });
+on('#fCustomiseBtn', 'click', () => { if (fSel) openMfForm(fSel, { fromBuiltin: !isPersonalFood(fSel) }); });
 
 function renderFoodExtras() {
   const { mine } = allCatalog();
@@ -762,7 +773,9 @@ function renderFoodExtras() {
     <div class="row" style="margin-top:4px"><button class="btn sm" type="button" data-mfuse="${fd.id}">Log it</button><button class="btn sm" type="button" data-mfedit="${fd.id}">Edit</button><button class="btn sm danger" type="button" data-mfdel="${fd.id}">Delete</button></div></div></div>`).join('')
     : '<p class="hint">No personal foods saved yet. Common foods still appear when you type in the add-food box.</p>';
   const pend = S.food.filter(i => i.pending);
-  $('#pendingInfo').innerHTML = pend.length ? `<div class="callout warn">${pend.length} photo meal${pend.length > 1 ? 's' : ''} awaiting an estimate (${pend.map(p => fmtDate(p.date) + (p.time ? ' ' + esc(p.time) : '')).join(', ')}). Send the photo to Health Bot, then tap <b>Paste from Health Bot</b>.</div>` : '';
+  const pendEl = $('#pendingInfo');
+  if (pendEl) pendEl.innerHTML = pend.length ? `<div class="callout warn">${pend.length} photo meal${pend.length > 1 ? 's' : ''} awaiting an estimate (${pend.map(p => fmtDate(p.date) + (p.time ? ' ' + esc(p.time) : '')).join(', ')}). Send the photo, then paste Health Bot's estimate back here.
+    <div class="row" style="margin-top:8px">${pend.filter(p => p.photo).map(p => `<button class="btn sm primary" type="button" data-fshare="${p.id}">Send photo to Health Bot${pend.length > 1 ? ' (' + fmtDate(p.date) + (p.time ? ' ' + esc(p.time) : '') + ')' : ''}</button>`).join('')}</div></div>` : '';
 }
 function openMfForm(fd, opts) {
   const fromBuiltin = !!(opts && opts.fromBuiltin) || (fd && !isPersonalFood(fd));
@@ -1000,7 +1013,7 @@ function refreshPasteLive() {
   const line = $('#pasteSummary');
   if (line) line.innerHTML = sm.text;
 }
-$('#pasteItems').addEventListener('input', e => {
+on('#pasteItems', 'input', e => {
   if (!pasteParsed) return;
   const q = e.target.closest('[data-pqty]'), u = e.target.closest('[data-punit]');
   if (q) { const i = +q.dataset.pqty, v = num(q.value); if (pasteParsed.data.items[i]) pasteParsed.data.items[i]._qty = Number.isFinite(v) ? v : NaN; }
