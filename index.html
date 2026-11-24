@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Health Tracker</title>
+<meta name="description" content="Weight, food, calorie deficit, peptide dosing and syringe calculator. Data stays on your phone.">
+<meta name="theme-color" content="#0f766e">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Health">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <h1>Health Tracker</h1>
+  <button id="themeBtn" class="icon-btn" aria-label="Toggle dark or light mode">◐</button>
+</header>
+<main id="main">
+  <div id="banner"></div>
+
+  <!-- WEIGHT -->
+  <section id="tab-weight" class="tab">
+    <div class="metrics" id="wMetrics"></div>
+    <div class="card"><div id="wChart" class="chart"></div>
+      <div class="seg" id="wRange"><button data-r="14" class="on">2 weeks</button><button data-r="30">30 days</button><button data-r="all">All</button></div>
+    </div>
+    <div class="card" id="wTrend"></div>
+    <form class="card form" id="wForm">
+      <h2 id="wFormTitle">Add weight</h2>
+      <div class="grid2">
+        <label>Date<input type="date" name="date" required></label>
+        <label>Weight (kg)<input type="number" name="kg" step="0.05" min="20" max="400" inputmode="decimal" required></label>
+      </div>
+      <p class="hint">One reading per day. A re-weigh on the same date replaces that day's reading.</p>
+      <div class="row"><button class="btn primary" type="submit">Save weight</button><button class="btn" type="button" data-cancel hidden>Cancel edit</button></div>
+      <div id="wResult" class="result"></div>
+    </form>
+    <div class="card"><h2>Monday weigh-ins</h2><div id="wMondays"></div></div>
+    <div class="card"><h2>All readings</h2><div id="wTable"></div></div>
+  </section>
+
+  <!-- FOOD -->
+  <section id="tab-food" class="tab" hidden>
+    <div class="card">
+      <label>Day<input type="date" id="fDay"></label>
+      <div class="metrics" id="fMetrics"></div>
+      <div id="fList"></div>
+      <div id="fNote" class="hint"></div>
+    </div>
+    <form class="card form" id="fForm">
+      <h2 id="fFormTitle">Add food</h2>
+      <label>Item<input name="item" required placeholder="e.g. 250 g rump steak"></label>
+      <div class="grid2">
+        <label>Calories<input type="number" name="cal" min="0" step="1" inputmode="numeric" placeholder="cal"></label>
+        <label>or kJ<input type="number" name="kj" min="0" step="1" inputmode="numeric" placeholder="kJ"></label>
+        <label>Protein (g)<input type="number" name="protein" min="0" step="0.1" inputmode="decimal"></label>
+        <label>Source<select name="source"><option value="label">From label</option><option value="estimate">Estimate</option></select></label>
+        <label>Date<input type="date" name="date" required></label>
+      </div>
+      <div class="photo-box">
+        <input type="file" id="fPhoto" accept="image/*" capture="environment" hidden>
+        <button type="button" class="btn" id="fPhotoBtn">📷 Add meal photo</button>
+        <img id="fThumb" alt="Meal photo preview" hidden>
+        <button type="button" class="btn" id="fShareBtn" hidden>Send photo to Health Bot</button>
+        <button type="button" class="btn ghost" id="fPhotoClear" hidden>Remove photo</button>
+      </div>
+      <p class="hint" id="fPhotoHint" hidden>This app can't estimate calories from a photo. Type the calories if you know them, or send the photo to Health Bot in chat for an estimate, then come back and enter the number (mark it as Estimate).</p>
+      <div class="row"><button class="btn primary" type="submit">Save food</button><button class="btn" type="button" data-cancel hidden>Cancel edit</button></div>
+    </form>
+    <div class="card"><h2>Recent days</h2><div id="fDays"></div></div>
+  </section>
+
+  <!-- DEFICIT -->
+  <section id="tab-deficit" class="tab" hidden>
+    <form class="card form" id="dForm">
+      <h2>Calorie deficit (Mifflin-St Jeor)</h2>
+      <div class="grid2">
+        <label>Weight (kg)<input type="number" name="wt" step="0.05" inputmode="decimal"></label>
+        <label>Height (cm)<input type="number" name="ht" step="0.5" inputmode="decimal"></label>
+        <label>Age (required)<input type="number" name="age" min="15" max="100" inputmode="numeric" placeholder="Enter your age"></label>
+        <label>Sex<select name="sex"><option value="male">Male</option><option value="female">Female</option></select></label>
+        <label class="span2">Activity<select name="act"></select></label>
+        <label>Daily intake (cal)<input type="number" name="intake" inputmode="numeric"></label>
+        <label>Goal (kg)<input type="number" name="goal" step="0.1" inputmode="decimal"></label>
+      </div>
+      <p class="hint">Weight defaults to your latest reading. Height, age, sex, activity and goal are saved.</p>
+    </form>
+    <div class="card"><div id="dOut"></div></div>
+    <div class="card"><h2>Deficit on logged days (estimate)</h2><div id="dDays"></div></div>
+  </section>
+
+  <!-- PEPTIDES -->
+  <section id="tab-peptides" class="tab" hidden>
+    <div class="card">
+      <label>Peptide<select id="pSel"></select></label>
+      <div id="pInfo"></div>
+      <div class="row"><button class="btn" id="pEditBtn" type="button">Edit peptide</button><button class="btn" id="pNewBtn" type="button">New peptide</button></div>
+    </div>
+    <form class="card form" id="pPepForm" hidden>
+      <h2 id="pPepTitle">Peptide</h2>
+      <label>Name<input name="name" required></label>
+      <div class="grid2">
+        <label>Concentration (mg/mL)<input type="number" name="mgPerMl" step="any" min="0" inputmode="decimal" required></label>
+        <label>Vial description<input name="vial" placeholder="10 mg/mL premixed"></label>
+      </div>
+      <label>Plan<input name="plan" placeholder="1 mg weekly for 8 weeks…"></label>
+      <div class="row"><button class="btn primary" type="submit">Save peptide</button><button class="btn" type="button" data-cancel>Cancel</button><button class="btn danger" type="button" id="pPepDel">Delete peptide</button></div>
+    </form>
+    <form class="card form" id="pForm">
+      <h2 id="pFormTitle">Log a dose</h2>
+      <div class="grid2">
+        <label>Date<input type="date" name="date" required></label>
+        <label>Time (optional)<input type="time" name="time"></label>
+        <label>Dose<input type="number" name="dose" step="any" min="0" inputmode="decimal" required></label>
+        <label>Unit<select name="unit"><option>mg</option><option>mcg</option></select></label>
+      </div>
+      <label>Note<input name="note" placeholder="e.g. Week 3, left abdomen"></label>
+      <div id="pPreview" class="hint"></div>
+      <div class="row"><button class="btn primary" type="submit">Save dose</button><button class="btn" type="button" data-cancel hidden>Cancel edit</button></div>
+    </form>
+    <div class="card"><h2>Logged doses</h2><div id="pDoses"></div></div>
+    <div class="card"><h2>Schedule</h2><div id="pSched"></div>
+      <details><summary>Build or replace schedule</summary>
+        <form class="form" id="pSchedForm">
+          <div class="grid2">
+            <label>First dose date<input type="date" name="start" required></label>
+            <label>Every (days)<input type="number" name="every" value="7" min="1" required></label>
+            <label>Phase 1 dose (mg)<input type="number" name="mg1" step="any" required></label>
+            <label>Phase 1 weeks<input type="number" name="n1" min="1" required></label>
+            <label>Phase 2 dose (mg)<input type="number" name="mg2" step="any"></label>
+            <label>Phase 2 weeks<input type="number" name="n2" min="0"></label>
+          </div>
+          <button class="btn" type="submit">Replace schedule</button>
+        </form>
+      </details>
+    </div>
+  </section>
+
+  <!-- SYRINGE -->
+  <section id="tab-syringe" class="tab" hidden>
+    <form class="card form" id="sForm">
+      <h2>Syringe calculator</h2>
+      <div class="row" id="sPresets"></div>
+      <div class="grid2">
+        <label>Peptide in vial (mg)<input type="number" name="vialMg" step="any" inputmode="decimal" value="10"></label>
+        <label>Water added (mL)<input type="number" name="water" step="any" inputmode="decimal" value="1"></label>
+        <label>Desired dose<input type="number" name="dose" step="any" inputmode="decimal" value="1"></label>
+        <label>Unit<select name="unit"><option>mg</option><option>mcg</option></select></label>
+        <label class="span2">Syringe<select name="syr">
+          <option value="100">U-100 1 mL (100 units)</option>
+          <option value="50">U-100 0.5 mL (50 units)</option>
+          <option value="30">U-100 0.3 mL (30 units)</option></select></label>
+      </div>
+    </form>
+    <div class="card"><div class="metrics" id="sMetrics"></div><div id="sDraw"></div><div id="sWarn"></div>
+      <p class="hint">Premixed 10 mg/mL: 1 mg is 0.1 mL (10 units); 2 mg is 0.2 mL (20 units). Always double-check against your prescriber's instructions.</p></div>
+  </section>
+
+  <!-- MORE -->
+  <section id="tab-more" class="tab" hidden>
+    <div class="card"><h2>Other health log</h2><div id="hList"></div></div>
+    <form class="card form" id="hForm">
+      <h2 id="hFormTitle">Add log entry</h2>
+      <div class="grid2"><label>Date<input type="date" name="date" required></label></div>
+      <label>Entry<textarea name="text" rows="2" required placeholder="e.g. Walked 2 hours, sauna 30 min"></textarea></label>
+      <div class="row"><button class="btn primary" type="submit">Save entry</button><button class="btn" type="button" data-cancel hidden>Cancel edit</button></div>
+    </form>
+    <div class="card"><h2>Profile</h2><div id="profList"></div>
+      <form class="form" id="profForm"><div class="grid2"><label>Label<input name="label" required></label><label>Value<input name="value" required></label></div><button class="btn" type="submit">Add profile item</button></form>
+    </div>
+    <form class="card form" id="setForm">
+      <h2>Targets</h2>
+      <div class="grid2">
+        <label>Goal weight (kg)<input type="number" name="goal" step="0.1"></label>
+        <label>Protein target (g)<input type="number" name="protein"></label>
+        <label>Daily cal from<input type="number" name="calMin"></label>
+        <label>Daily cal to<input type="number" name="calMax"></label>
+        <label>Chart band from (kg)<input type="number" name="bandLow" step="0.1" placeholder="optional"></label>
+        <label>Chart band to (kg)<input type="number" name="bandHigh" step="0.1" placeholder="optional"></label>
+      </div>
+      <button class="btn" type="submit">Save targets</button>
+    </form>
+    <div class="card">
+      <h2>Backup and data</h2>
+      <p class="hint">Everything is stored only on this phone, in this app. Export a backup now and then.</p>
+      <div class="row">
+        <button class="btn primary" id="exportBtn" type="button">Export backup (JSON)</button>
+        <button class="btn" id="importBtn" type="button">Import data</button>
+        <input type="file" id="importFile" accept="application/json,.json" hidden>
+      </div>
+      <p class="hint" id="storageInfo"></p>
+      <button class="btn danger" id="wipeBtn" type="button">Erase all data on this phone</button>
+    </div>
+    <div class="card hint">
+      <h2>Install on iPhone</h2>
+      <p>Open this page in Safari, tap Share, then "Add to Home Screen". It then opens full screen and works offline.</p>
+    </div>
+  </section>
+
+  <footer class="foot">General information, not medical advice.</footer>
+</main>
+<nav class="tabs" id="tabs">
+  <button data-tab="weight" class="on"><span>⚖️</span>Weight</button>
+  <button data-tab="food"><span>🍽️</span>Food</button>
+  <button data-tab="deficit"><span>🔥</span>Deficit</button>
+  <button data-tab="peptides"><span>💉</span>Doses</button>
+  <button data-tab="syringe"><span>📏</span>Syringe</button>
+  <button data-tab="more"><span>☰</span>More</button>
+</nav>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
