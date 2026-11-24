@@ -61,6 +61,11 @@ function normalise(s) {
   for (const k of ['weights', 'food', 'foods', 'peptides', 'doses', 'schedule', 'health', 'profile', 'importedCodes']) if (!Array.isArray(out[k])) out[k] = [];
   if (!out.dayNotes || typeof out.dayNotes !== 'object') out.dayNotes = {};
   for (const k of ['weights', 'food', 'foods', 'peptides', 'doses', 'health', 'profile']) out[k].forEach(x => { if (!x.id) x.id = uid(); });
+  out.foods.forEach(fd => {
+    if (!fd.basis) fd.basis = 'serving';
+    if (!fd.unit) fd.unit = 'g';
+    if (!(Number(fd.servingSize) > 0)) fd.servingSize = fd.basis === '100' ? 100 : 1;
+  });
   return out;
 }
 let S;
@@ -259,6 +264,140 @@ $('#wTable').addEventListener('click', e => {
 
 /* ========== FOOD ========== */
 let fEditId = null, fPhotoData = null, fPhotoFile = null;
+let fSel = null, mfEditId = null, mfFromBuiltin = false;
+let lastPhotoFile = null;
+let BUILTIN_FOODS = [];
+let builtinsReady = false;
+const SKIP_FOOD_NAMES = new Set(['meal photo', 'meal (photo)', 'meal', 'photo meal', 'meal (photo estimate)']);
+
+function foodKey(n) { return String(n || '').trim().toLowerCase().replace(/\s+/g, ' '); }
+function unitLabel(u) { return u === 'piece' ? 'piece' : (u || ''); }
+function nowTime() {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+}
+function normaliseFoodDef(fd) {
+  if (!fd || typeof fd !== 'object') return fd;
+  if (!fd.basis) fd.basis = 'serving';
+  if (!fd.unit) fd.unit = fd.basis === 'unit' ? 'piece' : 'g';
+  if (!(Number(fd.servingSize) > 0)) fd.servingSize = fd.basis === '100' ? 100 : 1;
+  if (fd.aka && !Array.isArray(fd.aka)) fd.aka = [];
+  return fd;
+}
+function catalogKeys(fd) {
+  const keys = [foodKey(fd.name)];
+  for (const a of fd.aka || []) { const k = foodKey(a); if (k) keys.push(k); }
+  return keys;
+}
+function foodMatches(fd, raw) {
+  const k = foodKey(raw);
+  return !!k && catalogKeys(fd).includes(k);
+}
+function basisAmount(fd) {
+  if (fd.basis === '100') return 100;
+  if (fd.basis === 'unit') return 1;
+  return Number(fd.servingSize) > 0 ? Number(fd.servingSize) : 1;
+}
+function defaultAmount(fd) {
+  const sv = Number(fd.servingSize) > 0 ? Number(fd.servingSize) : (fd.basis === '100' ? 100 : 1);
+  if (fd.basis === 'serving') return { amt: 1, unit: 'serving' };
+  return { amt: sv, unit: fd.unit || 'g' };
+}
+function scaleFood(fd, amt, unit) {
+  const sv = Number(fd.servingSize) > 0 ? Number(fd.servingSize) : 1;
+  const qtyInUnit = unit === 'serving' ? amt * sv : amt;
+  const base = basisAmount(fd);
+  const factor = (Number.isFinite(qtyInUnit) && base > 0) ? qtyInUnit / base : NaN;
+  const sc = v => (Number.isFinite(v) && Number.isFinite(factor) ? v * factor : null);
+  return { cal: sc(fd.cal), protein: sc(fd.protein), fat: sc(fd.fat), carbs: sc(fd.carbs), factor };
+}
+function foodSummary(fd) {
+  const per = fd.basis === '100' ? `per 100 ${unitLabel(fd.unit)}`
+    : fd.basis === 'unit' ? `per ${unitLabel(fd.unit)}`
+    : `per serve (${r2(fd.servingSize)} ${unitLabel(fd.unit)})`;
+  const bits = [Number.isFinite(fd.cal) ? `${fmtN(fd.cal)} cal / ${fmtN(fd.cal * KJ)} kJ ${per}` : `cal ? ${per}`];
+  if (Number.isFinite(fd.protein)) bits.push(`${r2(fd.protein)} g protein`);
+  if (Number.isFinite(fd.fat)) bits.push(`${r2(fd.fat)} g fat`);
+  if (Number.isFinite(fd.carbs)) bits.push(`${r2(fd.carbs)} g carbs`);
+  return bits.join(' · ');
+}
+function isPersonalFood(fd) { return !!(fd && S.foods.some(x => x.id === fd.id)); }
+function allCatalog() {
+  const mine = S.foods.map(normaliseFoodDef);
+  const mineKeys = new Set();
+  mine.forEach(f => catalogKeys(f).forEach(k => mineKeys.add(k)));
+  const extras = BUILTIN_FOODS.filter(f => !catalogKeys(f).some(k => mineKeys.has(k)));
+  return { mine, builtins: extras, all: mine.concat(extras) };
+}
+function foodByName(n) {
+  const k = foodKey(n);
+  if (!k) return null;
+  return S.foods.map(normaliseFoodDef).find(f => foodMatches(f, n))
+    || BUILTIN_FOODS.find(f => foodMatches(f, n))
+    || null;
+}
+function foodById(id) {
+  if (!id) return null;
+  return S.foods.map(normaliseFoodDef).find(f => f.id === id) || BUILTIN_FOODS.find(f => f.id === id) || null;
+}
+function knownFoodKeys() {
+  const s = new Set();
+  S.foods.forEach(f => catalogKeys(normaliseFoodDef(f)).forEach(k => s.add(k)));
+  BUILTIN_FOODS.forEach(f => catalogKeys(f).forEach(k => s.add(k)));
+  return s;
+}
+function migrateFoodsFromLog() {
+  const known = knownFoodKeys();
+  const groups = new Map();
+  for (const i of S.food) {
+    const k = foodKey(i.item);
+    if (!k || SKIP_FOOD_NAMES.has(k)) continue;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(i);
+  }
+  let added = 0;
+  for (const [k, items] of groups) {
+    if (known.has(k)) continue;
+    const withCal = items.filter(i => Number.isFinite(i.cal));
+    const withQty = withCal.filter(i => Number.isFinite(i.qty) && i.qty > 0);
+    const pick = withQty[withQty.length - 1] || withCal[withCal.length - 1] || items[items.length - 1];
+    const name = String(pick.item || '').trim();
+    if (!name) continue;
+    let servingSize = 1, unit = 'piece', basis = 'serving';
+    let cal = Number.isFinite(pick.cal) ? pick.cal : null;
+    let protein = Number.isFinite(pick.protein) ? pick.protein : null;
+    if (Number.isFinite(pick.basisCal) && Number.isFinite(pick.basisQty) && pick.basisQty > 0) {
+      cal = pick.basisCal;
+      protein = Number.isFinite(pick.basisProtein) ? pick.basisProtein : null;
+      servingSize = pick.basisQty;
+      unit = pick.basisUnit && pick.basisUnit !== 'serving' ? pick.basisUnit : (pick.qtyUnit && pick.qtyUnit !== 'serving' ? pick.qtyUnit : 'g');
+      basis = (unit === 'g' || unit === 'ml') && pick.basisQty === 100 ? '100' : (unit === 'piece' && pick.basisQty === 1 ? 'unit' : 'serving');
+    } else if (Number.isFinite(pick.qty) && pick.qty > 0) {
+      servingSize = pick.qty;
+      unit = pick.qtyUnit && pick.qtyUnit !== 'serving' ? pick.qtyUnit : 'piece';
+      basis = 'serving';
+    }
+    const rec = normaliseFoodDef({
+      id: uid(), name, servingSize, unit, basis, cal, protein, fat: null, carbs: null,
+      source: pick.source === 'label' ? 'label' : 'estimate', fromLog: true,
+    });
+    S.foods.push(rec);
+    known.add(k);
+    added++;
+  }
+  if (added) save();
+  return added;
+}
+async function loadBuiltins() {
+  if (builtinsReady) return BUILTIN_FOODS;
+  try {
+    const r = await fetch('foods.json', { cache: 'no-cache' });
+    const data = r.ok ? await r.json() : [];
+    BUILTIN_FOODS = (Array.isArray(data) ? data : []).map(x => normaliseFoodDef(Object.assign({ builtin: true }, x)));
+  } catch (e) { BUILTIN_FOODS = []; }
+  builtinsReady = true;
+  return BUILTIN_FOODS;
+}
+
 function dayFood(date) { return S.food.filter(f => f.date === date); }
 function dayTotals(date) {
   const items = dayFood(date);
@@ -274,6 +413,17 @@ function dayTotals(date) {
 function foodDates() {
   const set = new Set(S.food.map(f => f.date).concat(Object.keys(S.dayNotes)));
   return Array.from(set).sort().reverse();
+}
+function qtyLabel(i) {
+  if (!Number.isFinite(i.qty)) return '';
+  const u = i.qtyUnit === 'serving' ? (i.qty === 1 ? 'serve' : 'serves') : (i.qtyUnit || '');
+  return `${r2(i.qty)} ${esc(u)} · `;
+}
+function sourceTag(src) {
+  if (src === 'label') return '<span class="tag">label</span>';
+  if (src === 'typical') return '<span class="tag">typical</span>';
+  if (src === 'estimate') return '<span class="tag est">estimate</span>';
+  return '<span class="tag">not recorded</span>';
 }
 function renderFood() {
   const dayEl = $('#fDay'); if (!dayEl.value) dayEl.value = todayISO();
@@ -291,8 +441,8 @@ function renderFood() {
   $('#fList').innerHTML = t.items.length ? t.items.map(i => `
     <div class="item">${i.photo ? `<img class="thumb" src="${i.photo}" alt="Meal photo">` : ''}
       <div class="grow"><div><b>${esc(i.item)}</b>${i.pending ? ' <span class="tag pending">awaiting estimate</span>' : ''}${i.time ? ` <span class="sub">${esc(i.time)}</span>` : ''}</div>
-        <div class="sub">${Number.isFinite(i.qty) ? `${r2(i.qty)} ${i.qtyUnit === 'serving' ? (i.qty === 1 ? 'serve' : 'serves') : esc(i.qtyUnit || '')} · ` : ''}${Number.isFinite(i.cal) ? `${fmtN(i.cal)} cal · ${fmtN(i.cal * KJ)} kJ` : i.pending ? 'calories pending' : 'cal not recorded'}${Number.isFinite(i.protein) ? ` · ${i.protein} g protein` : ''}
-          ${i.source === 'label' ? '<span class="tag">label</span>' : i.source === 'estimate' ? '<span class="tag est">estimate</span>' : '<span class="tag">not recorded</span>'}</div>
+        <div class="sub">${qtyLabel(i)}${Number.isFinite(i.cal) ? `${fmtN(i.cal)} cal · ${fmtN(i.cal * KJ)} kJ` : i.pending ? 'calories pending' : 'cal not recorded'}${Number.isFinite(i.protein) ? ` · ${i.protein} g protein` : ''}
+          ${sourceTag(i.source)}</div>
         <div class="row" style="margin-top:4px"><button class="btn sm" data-fedit="${i.id}">Edit</button>${i.photo ? `<button class="btn sm" data-fshare="${i.id}">Send photo to Health Bot</button>` : ''}<button class="btn sm danger" data-fdel="${i.id}">Delete</button></div>
       </div></div>`).join('') : '<p class="hint">Nothing logged for this day.</p>';
   renderFoodExtras();
@@ -306,9 +456,8 @@ function renderFood() {
 }
 $('#fDay').addEventListener('change', () => { $('#fForm').date.value = $('#fDay').value; renderFood(); });
 $('#fDays').addEventListener('click', e => { const r = e.target.closest('[data-fday]'); if (r) { $('#fDay').value = r.dataset.fday; $('#fForm').date.value = r.dataset.fday; renderFood(); window.scrollTo(0, 0); } });
-// cal <-> kJ helper
-$('#fForm').cal.addEventListener('input', e => { const v = num(e.target.value); $('#fForm').kj.value = Number.isFinite(v) ? Math.round(v * KJ) : ''; });
-$('#fForm').kj.addEventListener('input', e => { const v = num(e.target.value); $('#fForm').cal.value = Number.isFinite(v) ? Math.round(v / KJ) : ''; });
+$('#fForm').cal.addEventListener('input', e => { const v = num(e.target.value); $('#fForm').kj.value = Number.isFinite(v) ? Math.round(v * KJ) : ''; updateLiveCal(); });
+$('#fForm').kj.addEventListener('input', e => { const v = num(e.target.value); $('#fForm').cal.value = Number.isFinite(v) ? Math.round(v / KJ) : ''; updateLiveCal(); });
 
 function compressImage(file, max = 480, q = 0.6) {
   return new Promise((resolve, reject) => {
@@ -358,29 +507,170 @@ $('#fShareBtn').addEventListener('click', () => {
   if (!fPhotoData) return;
   sharePhoto(fPhotoFile || dataURLtoFile(fPhotoData, 'meal.jpg'), $('#fForm').item.value);
 });
+
+function hideSuggest() { const el = $('#fSuggest'); if (el) el.hidden = true; }
+function suggestFoods(q) {
+  const k = foodKey(q);
+  if (k.length < 2) return [];
+  const { all } = allCatalog();
+  const scored = [];
+  for (const fd of all) {
+    let score = 0;
+    for (const n of [fd.name, ...(fd.aka || [])]) {
+      const nk = foodKey(n);
+      if (nk === k) score = Math.max(score, 3);
+      else if (nk.startsWith(k)) score = Math.max(score, 2);
+      else if (nk.includes(k)) score = Math.max(score, 1);
+    }
+    if (score) scored.push({ fd, score, personal: isPersonalFood(fd) });
+  }
+  scored.sort((a, b) => b.score - a.score || (b.personal - a.personal) || a.fd.name.localeCompare(b.fd.name));
+  return scored.slice(0, 12);
+}
+function renderSuggest() {
+  const box = $('#fSuggest'), q = $('#fForm').item.value;
+  if (!box) return;
+  const hits = suggestFoods(q);
+  if (!hits.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.innerHTML = hits.map((h, i) => `<button type="button" data-sugg="${esc(h.fd.id)}" class="${i === 0 ? 'active' : ''}"><b>${esc(h.fd.name)}</b> ${h.personal ? '<span class="tag">mine</span>' : '<span class="tag">typical</span>'}<div class="sub">${esc(foodSummary(h.fd))}</div></button>`).join('');
+  box.hidden = false;
+}
+function selectFood(fd, fill = true) {
+  const f = $('#fForm'); fSel = fd; mfFromBuiltin = !isPersonalFood(fd);
+  if (fill && f.item.value !== fd.name) f.item.value = fd.name;
+  const serveOpt = `<option value="serving">serves (${r2(fd.servingSize)} ${unitLabel(fd.unit)} each)</option>`;
+  const unitOpt = fd.unit !== 'piece' || fd.basis !== 'unit' ? `<option value="${fd.unit}">${unitLabel(fd.unit)}</option>` : `<option value="piece">piece</option>`;
+  f.amtUnit.innerHTML = (fd.basis === 'serving' ? serveOpt + (fd.unit !== 'piece' ? `<option value="${fd.unit}">${fd.unit}</option>` : '') : unitOpt + serveOpt);
+  const d = defaultAmount(fd);
+  f.amt.value = d.amt;
+  f.amtUnit.value = d.unit;
+  f.calMode.value = fd.basis === '100' ? '100' : fd.basis === 'unit' ? 'unit' : 'serving';
+  $('#fCustomiseBtn').hidden = isPersonalFood(fd);
+  hideSuggest();
+  if (fill) fillFromFood();
+  else updateFoodHint();
+  updateSaveRow();
+  updateLiveCal();
+}
+function fillFromFood() {
+  if (!fSel) return;
+  const f = $('#fForm'), amt = num(f.amt.value);
+  if (!Number.isFinite(amt)) return;
+  const v = scaleFood(fSel, amt, f.amtUnit.value);
+  f.cal.value = Number.isFinite(v.cal) ? Math.round(v.cal) : '';
+  f.kj.value = Number.isFinite(v.cal) ? Math.round(v.cal * KJ) : '';
+  f.protein.value = Number.isFinite(v.protein) ? r2(v.protein) : '';
+  f.source.value = fSel.source === 'label' ? 'label' : 'estimate';
+  updateFoodHint();
+  updateLiveCal();
+}
+function updateFoodHint() {
+  const el = $('#fFoodHint');
+  if (!el) return;
+  if (fSel) el.textContent = `${isPersonalFood(fSel) ? 'From My foods' : 'Typical values'}: ${foodSummary(fSel)}. Change the amount to scale calories. You can still adjust the numbers.`;
+  else {
+    const f = $('#fForm');
+    const mode = f.calMode.value;
+    el.textContent = mode === 'total'
+      ? 'Type the total calories you ate. Amount is optional, and is stored so you can change it later.'
+      : 'Enter the label value (e.g. 250 cal per 100 g) and how much you ate. The total updates below.';
+  }
+}
+function updateLiveCal() {
+  const el = $('#fLiveCal'), f = $('#fForm');
+  if (!el) return;
+  const amt = num(f.amt.value);
+  if (fSel && Number.isFinite(amt)) {
+    const v = scaleFood(fSel, amt, f.amtUnit.value);
+    if (Number.isFinite(v.cal)) {
+      el.textContent = `${r2(amt)} ${f.amtUnit.value === 'serving' ? (amt === 1 ? 'serve' : 'serves') : f.amtUnit.value} = ${fmtN(v.cal)} cal (${fmtN(v.cal * KJ)} kJ)${Number.isFinite(v.protein) ? `, ${r2(v.protein)} g protein` : ''}`;
+      return;
+    }
+  }
+  if (!fSel && f.calMode.value !== 'total' && Number.isFinite(amt) && amt > 0) {
+    const v = manualScaled();
+    if (v && Number.isFinite(v.cal)) {
+      el.textContent = `${r2(amt)} ${f.amtUnit.value} = ${fmtN(v.cal)} cal (${fmtN(v.cal * KJ)} kJ)${Number.isFinite(v.protein) ? `, ${r2(v.protein)} g protein` : ''}`;
+      return;
+    }
+  }
+  el.textContent = '';
+}
+function manualScaled() {
+  const f = $('#fForm'), mode = f.calMode.value, amt = num(f.amt.value);
+  const cal = num(f.cal.value), protein = num(f.protein.value);
+  if (mode === 'total' || !Number.isFinite(amt) || amt <= 0) return { cal: Number.isFinite(cal) ? cal : null, protein: Number.isFinite(protein) ? protein : null, factor: 1, labelCal: cal, labelProtein: protein, base: amt, unit: f.amtUnit.value };
+  let base = mode === '100' ? 100 : mode === 'unit' ? 1 : (num(f.svSize && f.svSize.value) > 0 ? num(f.svSize.value) : 1);
+  // When calories-are is "per serve" and unit is not serving, treat the entered cal as per 1 of that unit if no serve size given.
+  if (mode === 'serving' && f.amtUnit.value !== 'serving' && !(num(f.svSize && f.svSize.value) > 0)) base = 1;
+  const qty = f.amtUnit.value === 'serving' && mode === '100' ? amt * 100 : amt;
+  const factor = qty / base;
+  return {
+    cal: Number.isFinite(cal) ? cal * factor : null,
+    protein: Number.isFinite(protein) ? protein * factor : null,
+    factor, labelCal: cal, labelProtein: protein, base, unit: mode === '100' ? (f.amtUnit.value === 'ml' ? 'ml' : 'g') : f.amtUnit.value,
+  };
+}
+function updateSaveRow() {
+  const f = $('#fForm');
+  $('#fSaveRow').hidden = !!fSel || !!fEditId || !f.item.value.trim();
+  $('#fCustomiseBtn').hidden = !fSel || isPersonalFood(fSel);
+}
+
 function resetFoodForm() {
   fEditId = null; const f = $('#fForm'); f.reset(); f.date.value = $('#fDay').value || todayISO(); f.source.value = 'label';
+  f.calMode.value = 'total'; f.amtUnit.innerHTML = '<option value="g">g</option><option value="ml">ml</option><option value="piece">piece</option><option value="serving">serves</option>';
+  f.amt.value = ''; f.amtUnit.value = 'g';
   setPhoto(null); $('#fFormTitle').textContent = 'Add food'; $('[data-cancel]', f).hidden = true;
-  fSel = null; $('#fAmountRow').hidden = true; f.amt.value = 1; $('#fSaveFields').hidden = true; updateSaveRow();
+  fSel = null; mfFromBuiltin = false; $('#fCustomiseBtn').hidden = true; $('#fSaveFields').hidden = true;
+  hideSuggest(); updateSaveRow(); updateFoodHint(); updateLiveCal();
 }
 $('#fForm').addEventListener('submit', e => {
   e.preventDefault();
   const f = e.target;
-  const cal = num(f.cal.value), protein = num(f.protein.value);
+  const amt = num(f.amt.value);
+  let cal = num(f.cal.value), protein = num(f.protein.value);
+  let basisCal = null, basisProtein = null, basisQty = null, basisUnit = null;
+  if (fSel && Number.isFinite(amt)) {
+    const v = scaleFood(fSel, amt, f.amtUnit.value);
+    if (Number.isFinite(v.cal) && f.calMode.value !== 'total') {
+      // fields already hold computed totals from fillFromFood; use the field if the user overrode them
+    }
+    cal = Number.isFinite(cal) ? cal : v.cal;
+    protein = Number.isFinite(protein) ? protein : v.protein;
+    basisCal = fSel.cal; basisProtein = fSel.protein; basisQty = basisAmount(fSel); basisUnit = fSel.unit;
+  } else if (f.calMode.value !== 'total' && Number.isFinite(amt)) {
+    const v = manualScaled();
+    cal = v.cal; protein = v.protein;
+    basisCal = v.labelCal; basisProtein = v.labelProtein; basisQty = v.base; basisUnit = v.unit;
+  } else if (Number.isFinite(amt) && Number.isFinite(cal)) {
+    basisCal = cal; basisProtein = Number.isFinite(protein) ? protein : null; basisQty = amt; basisUnit = f.amtUnit.value;
+  }
   const rec = { date: f.date.value, item: f.item.value.trim(), cal: Number.isFinite(cal) ? Math.round(cal) : null, protein: Number.isFinite(protein) ? r2(protein) : null, source: f.source.value, photo: fPhotoData || null };
   if (!rec.item || !rec.date) return;
   if (rec.cal === null) rec.source = rec.source === 'label' ? 'not recorded' : rec.source;
   rec.pending = rec.cal === null && !!rec.photo;
-  const amt = num(f.amt.value);
-  if (fSel && Number.isFinite(amt)) { rec.foodId = fSel.id; rec.qty = amt; rec.qtyUnit = f.amtUnit.value; } else { rec.foodId = null; rec.qty = null; rec.qtyUnit = null; }
+  if (Number.isFinite(amt) && amt > 0) { rec.qty = amt; rec.qtyUnit = f.amtUnit.value; } else { rec.qty = null; rec.qtyUnit = null; }
+  rec.foodId = fSel ? fSel.id : null;
+  rec.basisCal = Number.isFinite(basisCal) ? basisCal : null;
+  rec.basisProtein = Number.isFinite(basisProtein) ? basisProtein : null;
+  rec.basisQty = Number.isFinite(basisQty) ? basisQty : null;
+  rec.basisUnit = basisUnit || null;
   let savedFood = '';
   if (!fSel && !fEditId && f.saveFood.checked && rec.cal !== null) {
-    const sv = num(f.svSize.value) > 0 ? num(f.svSize.value) : 1;
-    const nf = { id: uid(), name: rec.item, servingSize: sv, unit: f.svUnit.value, cal: rec.cal, protein: rec.protein, fat: null, carbs: null, source: rec.source === 'label' ? 'label' : 'estimate' };
-    S.foods.push(nf); rec.foodId = nf.id; rec.qty = 1; rec.qtyUnit = 'serving'; savedFood = ' Added to My foods.';
+    const sv = num(f.svSize.value) > 0 ? num(f.svSize.value) : (Number.isFinite(amt) && amt > 0 ? amt : 1);
+    const nf = normaliseFoodDef({ id: uid(), name: rec.item, servingSize: sv, unit: f.svUnit.value, basis: 'serving', cal: rec.cal, protein: rec.protein, fat: null, carbs: null, source: rec.source === 'label' ? 'label' : 'estimate' });
+    // If they entered per-basis values, store those instead.
+    if (f.calMode.value !== 'total' && Number.isFinite(basisCal)) {
+      nf.basis = f.calMode.value === '100' ? '100' : (f.calMode.value === 'unit' ? 'unit' : 'serving');
+      nf.cal = basisCal; nf.protein = basisProtein; nf.servingSize = f.calMode.value === '100' ? sv : (f.calMode.value === 'unit' ? 1 : sv);
+      nf.unit = f.svUnit.value || (f.amtUnit.value === 'serving' ? 'piece' : f.amtUnit.value);
+    }
+    S.foods.push(nf); rec.foodId = nf.id; savedFood = ' Added to My foods.';
   }
   if (fEditId) Object.assign(S.food.find(x => x.id === fEditId), rec); else S.food.push(Object.assign({ id: uid(), time: rec.date === todayISO() ? nowTime() : '' }, rec));
   if (!save()) return;
+  migrateFoodsFromLog();
   $('#fDay').value = rec.date;
   const t = dayTotals(rec.date);
   resetFoodForm(); renderAll();
@@ -395,91 +685,95 @@ $('#fList').addEventListener('click', e => {
     f.item.value = i.item; f.cal.value = Number.isFinite(i.cal) ? i.cal : ''; f.kj.value = Number.isFinite(i.cal) ? Math.round(i.cal * KJ) : '';
     f.protein.value = Number.isFinite(i.protein) ? i.protein : ''; f.source.value = i.source === 'label' ? 'label' : 'estimate'; f.date.value = i.date;
     setPhoto(i.photo || null);
-    const lf = i.foodId && S.foods.find(x => x.id === i.foodId);
-    if (lf) { selectFood(lf, false); if (Number.isFinite(i.qty)) { f.amt.value = i.qty; f.amtUnit.value = i.qtyUnit; } updateFoodHint(); } else { fSel = null; $('#fAmountRow').hidden = true; }
+    const lf = foodById(i.foodId) || (Number.isFinite(i.basisCal) && Number.isFinite(i.basisQty) ? normaliseFoodDef({
+      id: i.foodId || 'adhoc', name: i.item, basis: (i.basisUnit === 'g' || i.basisUnit === 'ml') && i.basisQty === 100 ? '100' : (i.basisUnit === 'piece' && i.basisQty === 1 ? 'unit' : 'serving'),
+      servingSize: i.basisQty, unit: i.basisUnit && i.basisUnit !== 'serving' ? i.basisUnit : 'g', cal: i.basisCal, protein: i.basisProtein, source: i.source,
+    }) : null);
+    if (lf) {
+      selectFood(lf, false);
+      if (Number.isFinite(i.qty)) { f.amt.value = i.qty; if (i.qtyUnit) f.amtUnit.value = i.qtyUnit; }
+      // Keep the logged totals in the fields (user may have overridden). Changing amount will rescale from basis.
+      f.cal.value = Number.isFinite(i.cal) ? i.cal : f.cal.value;
+      f.kj.value = Number.isFinite(i.cal) ? Math.round(i.cal * KJ) : f.kj.value;
+      f.protein.value = Number.isFinite(i.protein) ? i.protein : f.protein.value;
+      updateFoodHint(); updateLiveCal();
+    } else {
+      fSel = null; f.calMode.value = 'total';
+      if (Number.isFinite(i.qty)) { f.amt.value = i.qty; f.amtUnit.value = i.qtyUnit || 'g'; }
+      updateSaveRow(); updateFoodHint(); updateLiveCal();
+    }
     $('#fFormTitle').textContent = 'Edit food'; $('[data-cancel]', f).hidden = false; f.scrollIntoView({ behavior: 'smooth' });
   }
   if (del) { const i = S.food.find(x => x.id === del.dataset.fdel); if (i && confirm(`Delete "${i.item}"?`)) { S.food = S.food.filter(x => x !== i); save(); renderAll(); } }
   if (sh) { const i = S.food.find(x => x.id === sh.dataset.fshare); if (i && i.photo) sharePhoto(lastPhotoFile && lastPhotoFile.id === i.id ? lastPhotoFile.file : dataURLtoFile(i.photo, 'meal.jpg'), i.item); }
 });
 
-/* ========== MY FOODS (database) ========== */
-let fSel = null, mfEditId = null;
-function nowTime() {
-  return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
-}
-function foodByName(n) { const k = String(n || '').trim().toLowerCase(); return k ? S.foods.find(f => f.name.trim().toLowerCase() === k) || null : null; }
-function unitLabel(u) { return u === 'piece' ? 'piece' : u; }
-function scaleFood(fd, amt, unit) {
-  const factor = unit === 'serving' ? amt : amt / fd.servingSize;
-  const sc = v => (Number.isFinite(v) ? v * factor : null);
-  return { cal: sc(fd.cal), protein: sc(fd.protein), fat: sc(fd.fat), carbs: sc(fd.carbs) };
-}
-function foodSummary(fd) {
-  const bits = [`${r2(fd.servingSize)} ${unitLabel(fd.unit)} serve`, Number.isFinite(fd.cal) ? `${fmtN(fd.cal)} cal / ${fmtN(fd.cal * KJ)} kJ` : 'cal ?'];
-  if (Number.isFinite(fd.protein)) bits.push(`${r2(fd.protein)} g protein`);
-  if (Number.isFinite(fd.fat)) bits.push(`${r2(fd.fat)} g fat`);
-  if (Number.isFinite(fd.carbs)) bits.push(`${r2(fd.carbs)} g carbs`);
-  if (fd.unit !== 'piece' && Number.isFinite(fd.cal) && fd.servingSize > 0) bits.push(`${fmtN(fd.cal / fd.servingSize * 100)} cal per 100 ${fd.unit}`);
-  return bits.join(' · ');
-}
-function selectFood(fd, fill = true) {
-  const f = $('#fForm'); fSel = fd;
-  if (fill && f.item.value !== fd.name) f.item.value = fd.name;
-  f.amtUnit.innerHTML = `<option value="serving">serves (${r2(fd.servingSize)} ${unitLabel(fd.unit)} each)</option>` + (fd.unit !== 'piece' ? `<option value="${fd.unit}">${fd.unit}</option>` : '');
-  f.amt.value = 1; f.amtUnit.value = 'serving';
-  $('#fAmountRow').hidden = false;
-  if (fill) fillFromFood();
-  updateSaveRow();
-}
-function fillFromFood() {
-  if (!fSel) return;
-  const f = $('#fForm'), amt = num(f.amt.value);
-  if (!Number.isFinite(amt)) return;
-  const v = scaleFood(fSel, amt, f.amtUnit.value);
-  f.cal.value = Number.isFinite(v.cal) ? Math.round(v.cal) : '';
-  f.kj.value = Number.isFinite(v.cal) ? Math.round(v.cal * KJ) : '';
-  f.protein.value = Number.isFinite(v.protein) ? r2(v.protein) : '';
-  f.source.value = fSel.source === 'label' ? 'label' : 'estimate';
-  updateFoodHint();
-}
-function updateFoodHint() { if (fSel) $('#fFoodHint').textContent = `From My foods: ${foodSummary(fSel)}. You can still adjust the numbers.`; }
-function updateSaveRow() {
-  const f = $('#fForm');
-  $('#fSaveRow').hidden = !!fSel || !!fEditId || !f.item.value.trim();
-}
+/* ========== MY FOODS (database) + suggestions ========== */
 $('#fForm').item.addEventListener('input', e => {
   const fd = foodByName(e.target.value);
-  if (fd && fd !== fSel) selectFood(fd);
-  else if (!fd && fSel) { fSel = null; $('#fAmountRow').hidden = true; }
+  if (fd && foodKey(fd.name) === foodKey(e.target.value) && fd !== fSel) selectFood(fd);
+  else if (!fd && fSel && foodKey(e.target.value) !== foodKey(fSel.name)) { fSel = null; fSelClearPartial(); }
   updateSaveRow();
+  renderSuggest();
 });
-$('#fForm').amt.addEventListener('input', fillFromFood);
+$('#fForm').item.addEventListener('focus', () => { if (foodKey($('#fForm').item.value).length >= 2) renderSuggest(); });
+$('#fForm').item.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { hideSuggest(); return; }
+  const box = $('#fSuggest');
+  if (box && !box.hidden && (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'Tab') && suggestFoods($('#fForm').item.value).length) {
+    const first = $('[data-sugg]', box);
+    if (first && (e.key === 'Enter' || e.key === 'Tab')) { e.preventDefault(); pickSuggest(first.dataset.sugg); }
+  }
+});
+document.addEventListener('click', e => { if (!e.target.closest('.suggest-wrap')) hideSuggest(); });
+$('#fSuggest').addEventListener('click', e => {
+  const b = e.target.closest('[data-sugg]'); if (b) pickSuggest(b.dataset.sugg);
+});
+function pickSuggest(id) {
+  const fd = foodById(id); if (!fd) return;
+  const f = $('#fForm'); f.item.value = fd.name; selectFood(fd); f.amt.focus();
+}
+function fSelClearPartial() {
+  const f = $('#fForm');
+  f.calMode.value = 'total';
+  $('#fCustomiseBtn').hidden = true;
+  updateFoodHint(); updateLiveCal();
+}
+$('#fForm').amt.addEventListener('input', () => { if (fSel) fillFromFood(); else updateLiveCal(); });
 $('#fForm').amtUnit.addEventListener('change', e => {
-  // keep the same quantity when switching units
   const f = $('#fForm'), a = num(f.amt.value);
-  if (fSel && Number.isFinite(a)) f.amt.value = e.target.value === 'serving' ? r2(a / fSel.servingSize) : r2(a * fSel.servingSize);
-  fillFromFood();
+  if (fSel && Number.isFinite(a)) {
+    const sv = Number(fSel.servingSize) > 0 ? Number(fSel.servingSize) : 1;
+    if (e.target.value === 'serving') f.amt.value = r2(a / sv);
+    else if (f.amtUnit._prev === 'serving') f.amt.value = r2(a * sv);
+  }
+  f.amtUnit._prev = e.target.value;
+  if (fSel) fillFromFood(); else updateLiveCal();
 });
+$('#fForm').calMode.addEventListener('change', () => { updateFoodHint(); updateLiveCal(); });
 $('#fForm').saveFood.addEventListener('change', e => { $('#fSaveFields').hidden = !e.target.checked; });
+$('#fCustomiseBtn').addEventListener('click', () => { if (fSel) openMfForm(fSel, { fromBuiltin: !isPersonalFood(fSel) }); });
 
 function renderFoodExtras() {
-  const foods = S.foods.slice().sort((a, b) => a.name.localeCompare(b.name));
-  $('#foodList').innerHTML = foods.map(fd => `<option value="${esc(fd.name)}">`).join('');
-  $('#mfList').innerHTML = foods.length ? foods.map(fd => `<div class="item"><div class="grow"><div><b>${esc(fd.name)}</b> ${fd.source === 'label' ? '<span class="tag">label</span>' : '<span class="tag est">estimate</span>'}</div>
+  const { mine } = allCatalog();
+  const foods = mine.slice().sort((a, b) => a.name.localeCompare(b.name));
+  $('#mfList').innerHTML = foods.length ? foods.map(fd => `<div class="item"><div class="grow"><div><b>${esc(fd.name)}</b> ${sourceTag(fd.source)}</div>
     <div class="sub">${esc(foodSummary(fd))}</div>
     <div class="row" style="margin-top:4px"><button class="btn sm" type="button" data-mfuse="${fd.id}">Log it</button><button class="btn sm" type="button" data-mfedit="${fd.id}">Edit</button><button class="btn sm danger" type="button" data-mfdel="${fd.id}">Delete</button></div></div></div>`).join('')
-    : '<p class="hint">No saved foods yet.</p>';
+    : '<p class="hint">No personal foods saved yet. Common foods still appear when you type in the add-food box.</p>';
   const pend = S.food.filter(i => i.pending);
   $('#pendingInfo').innerHTML = pend.length ? `<div class="callout warn">${pend.length} photo meal${pend.length > 1 ? 's' : ''} awaiting an estimate (${pend.map(p => fmtDate(p.date) + (p.time ? ' ' + esc(p.time) : '')).join(', ')}). Send the photo to Health Bot, then tap <b>Paste from Health Bot</b>.</div>` : '';
 }
-function openMfForm(fd) {
-  mfEditId = fd ? fd.id : null; const f = $('#mfForm'); f.reset(); f.hidden = false;
-  $('#mfTitle').textContent = fd ? 'Edit food' : 'Add to My foods';
+function openMfForm(fd, opts) {
+  const fromBuiltin = !!(opts && opts.fromBuiltin) || (fd && !isPersonalFood(fd));
+  mfEditId = fd && !fromBuiltin ? fd.id : null;
+  mfFromBuiltin = fromBuiltin;
+  const f = $('#mfForm'); f.reset(); f.hidden = false;
+  $('#mfTitle').textContent = fromBuiltin ? 'Customise in My foods' : (fd ? 'Edit food' : 'Add to My foods');
   if (fd) {
-    f.name.value = fd.name; f.svSize.value = fd.servingSize; f.svUnit.value = fd.unit; f.basis.value = 'serving';
+    f.name.value = fd.name; f.svSize.value = fd.servingSize; f.svUnit.value = fd.unit; f.basis.value = fd.basis === '100' ? '100' : 'serving';
     f.cal.value = Number.isFinite(fd.cal) ? r2(fd.cal) : ''; f.kj.value = Number.isFinite(fd.cal) ? Math.round(fd.cal * KJ) : '';
-    f.protein.value = fd.protein ?? ''; f.fat.value = fd.fat ?? ''; f.carbs.value = fd.carbs ?? ''; f.source.value = fd.source || 'label';
+    f.protein.value = fd.protein ?? ''; f.fat.value = fd.fat ?? ''; f.carbs.value = fd.carbs ?? ''; f.source.value = fd.source === 'typical' ? 'estimate' : (fd.source || 'label');
   }
   mfPreview(); f.scrollIntoView({ behavior: 'smooth' });
 }
@@ -487,13 +781,13 @@ function mfValues() {
   const f = $('#mfForm'), sv = num(f.svSize.value), unit = f.svUnit.value, per100 = f.basis.value === '100';
   if (per100 && unit === 'piece') return { error: 'Per 100 g/ml needs a serving unit of g or ml.' };
   if (!(sv > 0)) return { error: 'Enter a serving size.' };
-  const factor = per100 ? sv / 100 : 1;
-  const g = k => { const v = num(f[k].value); return Number.isFinite(v) ? Math.round(v * factor * 100) / 100 : null; };
-  return { name: f.name.value.trim(), servingSize: sv, unit, cal: g('cal'), protein: g('protein'), fat: g('fat'), carbs: g('carbs'), source: f.source.value };
+  const g = k => { const v = num(f[k].value); return Number.isFinite(v) ? Math.round(v * 100) / 100 : null; };
+  // Store values as entered for the chosen basis (no longer converted to per-serve).
+  return { name: f.name.value.trim(), servingSize: sv, unit, basis: per100 ? '100' : 'serving', cal: g('cal'), protein: g('protein'), fat: g('fat'), carbs: g('carbs'), source: f.source.value };
 }
 function mfPreview() {
   const v = mfValues();
-  $('#mfPreview').textContent = v.error ? v.error : v.cal !== null ? `Saved as per serve: ${foodSummary(v)}` : 'Enter calories or kJ.';
+  $('#mfPreview').textContent = v.error ? v.error : v.cal !== null ? `Will be saved as: ${foodSummary(v)}` : 'Enter calories or kJ.';
 }
 $('#mfForm').addEventListener('input', e => {
   const f = $('#mfForm');
@@ -506,20 +800,20 @@ $('#mfForm').addEventListener('submit', e => {
   e.preventDefault();
   const v = mfValues(); if (v.error) { toast(v.error); return; }
   if (!v.name || v.cal === null) { toast('Name and calories are needed.'); return; }
-  const dupe = foodByName(v.name);
+  const dupe = S.foods.find(x => foodKey(x.name) === foodKey(v.name));
   if (dupe && dupe.id !== mfEditId && !confirm(`"${dupe.name}" is already in My foods. Replace it?`)) return;
   if (mfEditId) Object.assign(S.foods.find(x => x.id === mfEditId), v);
   else if (dupe) Object.assign(dupe, v);
   else S.foods.push(Object.assign({ id: uid() }, v));
   if (!save()) return;
-  $('#mfForm').hidden = true; mfEditId = null; renderAll(); toast(`Saved ${v.name} to My foods`);
+  $('#mfForm').hidden = true; mfEditId = null; mfFromBuiltin = false; renderAll(); toast(`Saved ${v.name} to My foods`);
 });
-$('#mfForm [data-cancel]').addEventListener('click', () => { $('#mfForm').hidden = true; mfEditId = null; });
+$('#mfForm [data-cancel]').addEventListener('click', () => { $('#mfForm').hidden = true; mfEditId = null; mfFromBuiltin = false; });
 $('#mfNewBtn').addEventListener('click', () => openMfForm(null));
 $('#mfList').addEventListener('click', e => {
   const u = e.target.closest('[data-mfuse]'), ed = e.target.closest('[data-mfedit]'), del = e.target.closest('[data-mfdel]');
-  if (u) { const fd = S.foods.find(x => x.id === u.dataset.mfuse); if (!fd) return; resetFoodForm(); const f = $('#fForm'); f.item.value = fd.name; selectFood(fd); f.scrollIntoView({ behavior: 'smooth' }); f.amt.focus(); }
-  if (ed) openMfForm(S.foods.find(x => x.id === ed.dataset.mfedit));
+  if (u) { const fd = foodById(u.dataset.mfuse); if (!fd) return; resetFoodForm(); const f = $('#fForm'); f.item.value = fd.name; selectFood(fd); f.scrollIntoView({ behavior: 'smooth' }); f.amt.focus(); }
+  if (ed) openMfForm(foodById(ed.dataset.mfedit));
   if (del) { const fd = S.foods.find(x => x.id === del.dataset.mfdel); if (fd && confirm(`Delete ${fd.name} from My foods? Logged entries stay.`)) { S.foods = S.foods.filter(x => x !== fd); save(); renderAll(); } }
 });
 
@@ -538,11 +832,11 @@ $('#mealPhoto').addEventListener('change', async e => {
     toast('Photo meal saved, awaiting estimate. Tap "Send photo to Health Bot" on it.');
   } catch (err) { toast(err.message); }
 });
-let lastPhotoFile = null;
 
 /* ========== HEALTH BOT PASTE BRIDGE (HB1 codes) ==========
-   Format: "HB1:" + base64url(UTF-8 JSON), JSON = {t:'meal', d:'YYYY-MM-DD', time?:'HH:MM', items:[{n, cal, p?, src?:'estimate'|'label'}], note?}
-   The token may appear anywhere in pasted text. */
+   Format: "HB1:" + base64url(UTF-8 JSON), JSON = {t:'meal', d:'YYYY-MM-DD', time?:'HH:MM',
+     items:[{n, cal, p?, src?, q?, u?, per?, pu?}], note?}
+   cal/p are for estimated amount q (default 1 serving). The token may appear anywhere in pasted text. */
 function b64urlDecode(str) {
   let b = str.replace(/-/g, '+').replace(/_/g, '/'); while (b.length % 4) b += '=';
   const bin = atob(b), bytes = new Uint8Array(bin.length);
@@ -564,13 +858,39 @@ function parseHB(text) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(o.d || '')) return { ok: false, error: 'The code has no valid date.' };
   if (!Array.isArray(o.items) || !o.items.length) return { ok: false, error: 'The code has no food items.' };
   const items = [];
+  const unitOk = u => ['g', 'ml', 'piece', 'serving'].includes(u);
   for (const it of o.items) {
     const cal = Number(it.cal), p = it.p === undefined || it.p === null ? null : Number(it.p);
     if (!it.n || !Number.isFinite(cal) || cal < 0 || (p !== null && !Number.isFinite(p))) return { ok: false, error: 'An item in the code is missing a name or calories.' };
-    items.push({ n: String(it.n).slice(0, 120), cal: Math.round(cal), p: p === null ? null : r2(p), src: it.src === 'label' ? 'label' : 'estimate' });
+    const q = it.q === undefined || it.q === null || it.q === '' ? null : Number(it.q);
+    const per = it.per === undefined || it.per === null || it.per === '' ? null : Number(it.per);
+    if (q !== null && (!Number.isFinite(q) || q <= 0)) return { ok: false, error: 'An item has an invalid quantity.' };
+    if (per !== null && (!Number.isFinite(per) || per <= 0)) return { ok: false, error: 'An item has an invalid per-basis amount.' };
+    items.push({
+      n: String(it.n).slice(0, 120), cal: Math.round(cal), p: p === null ? null : r2(p), src: it.src === 'label' ? 'label' : 'estimate',
+      q: q, u: unitOk(it.u) ? it.u : null, per: per, pu: unitOk(it.pu) ? it.pu : null,
+    });
   }
   const time = /^\d{2}:\d{2}$/.test(o.time || '') ? o.time : '';
   return { ok: true, code: m[0], data: { d: o.d, time, items, note: o.note ? String(o.note).slice(0, 300) : '' } };
+}
+function itemDefaultQty(it) {
+  return { qty: Number.isFinite(it.q) && it.q > 0 ? it.q : 1, unit: it.u || 'serving' };
+}
+function scaleHBItem(it) {
+  const d = itemDefaultQty(it);
+  const qty = Number.isFinite(it._qty) ? it._qty : d.qty;
+  const unit = it._unit || d.unit;
+  const factor = d.qty > 0 ? qty / d.qty : 1;
+  return {
+    item: it.n,
+    cal: Math.round(it.cal * factor),
+    protein: it.p === null ? null : r2(it.p * factor),
+    source: it.src,
+    qty, qtyUnit: unit,
+    basisCal: it.cal, basisProtein: it.p, basisQty: d.qty, basisUnit: d.unit,
+    fromHB: true, pending: false,
+  };
 }
 function pendingCandidates(date) {
   const key = i => i.date + ' ' + (i.time || '') + ' ' + i.id;
@@ -580,19 +900,21 @@ function pendingCandidates(date) {
   return { same, other };
 }
 function codeSummary(d) {
-  const cal = d.items.reduce((a, i) => a + i.cal, 0), p = d.items.reduce((a, i) => a + (i.p || 0), 0);
-  return { cal, p, text: `${d.items.length} item${d.items.length > 1 ? 's' : ''}: ${d.items.map(i => `${esc(i.n)} ${fmtN(i.cal)} cal`).join(', ')} · total ${fmtN(cal)} cal (${fmtN(cal * KJ)} kJ), ${r2(p)} g protein` };
+  const recs = d.items.map(scaleHBItem);
+  const cal = recs.reduce((a, i) => a + i.cal, 0), p = recs.reduce((a, i) => a + (i.protein || 0), 0);
+  return { cal, p, recs, text: `${recs.length} item${recs.length > 1 ? 's' : ''}: ${recs.map(i => `${esc(i.item)} ${Number.isFinite(i.qty) ? r2(i.qty) + ' ' + esc(i.qtyUnit) + ' ' : ''}${fmtN(i.cal)} cal`).join(', ')} · total ${fmtN(cal)} cal (${fmtN(cal * KJ)} kJ), ${r2(p)} g protein` };
 }
 function applyCode(parsed, targetId) {
   const d = parsed.data, target = targetId ? S.food.find(i => i.id === targetId && i.pending) : null;
   const date = target ? target.date : d.d, mealId = (target && target.mealId) || uid();
   const time = d.time || (target && target.time) || '';
-  const recs = d.items.map(it => ({ item: it.n, cal: it.cal, protein: it.p, source: it.src, date, time, mealId, pending: false, fromHB: true }));
+  const recs = d.items.map(it => Object.assign(scaleHBItem(it), { date, time, mealId }));
   if (d.note) recs[0].note = d.note;
   if (target) { Object.assign(target, recs[0]); recs.shift(); }
   recs.forEach(r => S.food.push(Object.assign({ id: uid(), photo: null }, r)));
   S.importedCodes = S.importedCodes.concat([parsed.code]).slice(-200);
   if (!save()) return;
+  migrateFoodsFromLog();
   const sm = codeSummary(d), t = dayTotals(date), st = S.settings;
   const lo = num(st.calMin), hi = num(st.calMax);
   const left = Number.isFinite(hi) ? (t.cal > hi ? `${fmtN(t.cal - hi)} cal over the top of your target` : `${fmtN(Math.max(0, lo - t.cal))}–${fmtN(hi - t.cal)} cal left`) : '';
@@ -609,9 +931,25 @@ function fillPasteTarget(parsed) {
   $('#pasteTarget').innerHTML = same.map((i, k) => opt(i, same.length > 1 ? k : null)).join('') + other.map(i => opt(i, null)).join('') + `<option value="">New meal on ${fmtDate(parsed.data.d)} (no photo)</option>`;
   $('#pasteTargetWrap').hidden = false;
 }
+function renderPasteItems(parsed) {
+  const box = $('#pasteItems'); if (!box) return;
+  box.innerHTML = parsed.data.items.map((it, i) => {
+    const d = itemDefaultQty(it);
+    if (!Number.isFinite(it._qty)) it._qty = d.qty;
+    if (!it._unit) it._unit = d.unit;
+    const rec = scaleHBItem(it);
+    return `<div class="item paste-item"><div class="grow"><b>${esc(it.n)}</b><div class="sub">${fmtN(rec.cal)} cal (${fmtN(rec.cal * KJ)} kJ)${rec.protein != null ? ` · ${rec.protein} g protein` : ''} <span class="tag ${it.src === 'label' ? '' : 'est'}">${esc(it.src)}</span></div></div>
+      <div class="qtybox grid2">
+        <label>Amount<input type="number" data-pqty="${i}" value="${it._qty}" step="any" min="0" inputmode="decimal"></label>
+        <label>Unit<select data-punit="${i}"><option value="${esc(it._unit)}" selected>${esc(it._unit)}</option>${['g','ml','piece','serving'].filter(u => u !== it._unit).map(u => `<option value="${u}">${u}</option>`).join('')}</select></label>
+      </div></div>`;
+  }).join('');
+}
 function showPasteParsed(parsed, warn) {
   pasteParsed = parsed;
-  $('#pastePreview').innerHTML = `<div class="callout ${warn ? 'warn' : ''}">${warn ? esc(warn) + '<br>' : ''}Meal on ${fmtDate(parsed.data.d)}${parsed.data.time ? ' at ' + esc(parsed.data.time) : ''}: ${codeSummary(parsed.data).text}${parsed.data.note ? '<br>Note: ' + esc(parsed.data.note) : ''}</div>`;
+  parsed.data.items.forEach(it => { const d = itemDefaultQty(it); if (!Number.isFinite(it._qty)) it._qty = d.qty; if (!it._unit) it._unit = d.unit; });
+  $('#pastePreview').innerHTML = `<div class="callout ${warn ? 'warn' : ''}">${warn ? esc(warn) + '<br>' : ''}Meal on ${fmtDate(parsed.data.d)}${parsed.data.time ? ' at ' + esc(parsed.data.time) : ''}: <span id="pasteSummary">${codeSummary(parsed.data).text}</span>${parsed.data.note ? '<br>Note: ' + esc(parsed.data.note) : ''}. You can change the amounts before saving.</div>`;
+  renderPasteItems(parsed);
   fillPasteTarget(parsed);
   $('#pasteSave').disabled = false;
 }
@@ -619,9 +957,9 @@ function openPastePanel(text, msg) {
   const panel = $('#pastePanel'); panel.hidden = false; showTab('food');
   $('#pasteText').value = text || ''; pasteParsed = null; $('#pasteSave').disabled = true; $('#pasteTargetWrap').hidden = true;
   $('#pastePreview').innerHTML = msg ? `<div class="callout warn">${esc(msg)}</div>` : '';
+  if ($('#pasteItems')) $('#pasteItems').innerHTML = '';
   panel.scrollIntoView({ behavior: 'smooth' }); setTimeout(() => $('#pasteText').focus(), 300);
 }
-// Decide whether we can save straight away or need the user to pick.
 function handleCode(parsed, rawText) {
   const { same, other } = pendingCandidates(parsed.data.d);
   if (S.importedCodes.includes(parsed.code)) {
@@ -629,7 +967,7 @@ function handleCode(parsed, rawText) {
   }
   if (same.length === 1 && other.length === 0) return applyCode(parsed, same[0].id);
   if (same.length === 0 && other.length === 0) return applyCode(parsed, null);
-  if (same.length === 1) return applyCode(parsed, same[0].id); // most recent pending meal for that date
+  if (same.length === 1) return applyCode(parsed, same[0].id);
   openPastePanel(rawText, null); showPasteParsed(parsed, 'More than one photo meal is waiting for that day. Pick which one this estimate is for.');
 }
 $('#pasteBtn').addEventListener('click', async () => {
@@ -642,16 +980,37 @@ $('#pasteBtn').addEventListener('click', async () => {
 });
 $('#pasteText').addEventListener('input', () => {
   const raw = $('#pasteText').value, p = parseHB(raw);
-  if (!raw.trim()) { $('#pastePreview').innerHTML = ''; $('#pasteSave').disabled = true; return; }
-  if (!p.ok) { pasteParsed = null; $('#pasteSave').disabled = true; $('#pasteTargetWrap').hidden = true; $('#pastePreview').innerHTML = `<div class="callout warn">${esc(p.error)}</div>`; return; }
+  if (!raw.trim()) { $('#pastePreview').innerHTML = ''; if ($('#pasteItems')) $('#pasteItems').innerHTML = ''; $('#pasteSave').disabled = true; return; }
+  if (!p.ok) { pasteParsed = null; $('#pasteSave').disabled = true; $('#pasteTargetWrap').hidden = true; $('#pastePreview').innerHTML = `<div class="callout warn">${esc(p.error)}</div>`; if ($('#pasteItems')) $('#pasteItems').innerHTML = ''; return; }
   const { same, other } = pendingCandidates(p.data.d);
   const dup = S.importedCodes.includes(p.code);
-  if (!dup && (same.length + other.length <= 1 || same.length === 1)) handleCode(p, raw); // unambiguous: save automatically
+  if (!dup && (same.length + other.length <= 1 || same.length === 1)) handleCode(p, raw);
   else showPasteParsed(p, dup ? 'This code was already imported once. Save again only if it is a different meal.' : 'More than one photo meal is waiting. Pick which one this estimate is for.');
 });
+function refreshPasteLive() {
+  if (!pasteParsed) return;
+  const items = pasteParsed.data.items;
+  $$('#pasteItems .paste-item').forEach((el, i) => {
+    if (!items[i]) return;
+    const rec = scaleHBItem(items[i]);
+    const sub = el.querySelector('.sub');
+    if (sub) sub.innerHTML = `${fmtN(rec.cal)} cal (${fmtN(rec.cal * KJ)} kJ)${rec.protein != null ? ` · ${rec.protein} g protein` : ''} <span class="tag ${items[i].src === 'label' ? '' : 'est'}">${esc(items[i].src)}</span>`;
+  });
+  const sm = codeSummary(pasteParsed.data);
+  const line = $('#pasteSummary');
+  if (line) line.innerHTML = sm.text;
+}
+$('#pasteItems').addEventListener('input', e => {
+  if (!pasteParsed) return;
+  const q = e.target.closest('[data-pqty]'), u = e.target.closest('[data-punit]');
+  if (q) { const i = +q.dataset.pqty, v = num(q.value); if (pasteParsed.data.items[i]) pasteParsed.data.items[i]._qty = Number.isFinite(v) ? v : NaN; }
+  if (u) { const i = +u.dataset.punit; if (pasteParsed.data.items[i]) pasteParsed.data.items[i]._unit = u.value; }
+  refreshPasteLive();
+});
 $('#pasteSave').addEventListener('click', () => { if (pasteParsed) applyCode(pasteParsed, $('#pasteTarget').value || null); });
-$('#pasteCancel').addEventListener('click', () => { $('#pastePanel').hidden = true; pasteParsed = null; });
-window.HB = { parseHB, makeHB }; // for testing / console use
+$('#pasteCancel').addEventListener('click', () => { $('#pastePanel').hidden = true; pasteParsed = null; if ($('#pasteItems')) $('#pasteItems').innerHTML = ''; });
+window.HB = { parseHB, makeHB };
+window.HT = { scaleFood, foodByName, foodById, migrateFoodsFromLog, allCatalog, foodKey, defaultAmount, parseHB, makeHB, scaleHBItem, suggestFoods, get builtins() { return BUILTIN_FOODS; }, get state() { return S; } };
 
 /* ========== DEFICIT ========== */
 function weightOn(iso) {
@@ -930,7 +1289,7 @@ $('#importFile').addEventListener('change', async e => {
   const file = e.target.files && e.target.files[0]; if (!file) return;
   try {
     importData(JSON.parse(await file.text()));
-    if (save()) { pSel = null; $('#dForm').dataset.init = ''; renderAll(); resetForms(); toast(`Imported: ${S.weights.length} weights, ${S.food.length} food items, ${S.foods.length} saved foods, ${S.doses.length} doses.`); }
+    if (save()) { pSel = null; $('#dForm').dataset.init = ''; migrateFoodsFromLog(); renderAll(); resetForms(); toast(`Imported: ${S.weights.length} weights, ${S.food.length} food items, ${S.foods.length} saved foods, ${S.doses.length} doses.`); }
   } catch (err) { toast(err.message || 'Could not read that file.'); }
   e.target.value = '';
 });
@@ -944,13 +1303,16 @@ $('#wipeBtn').addEventListener('click', () => {
 function renderAll() { renderBanner(); renderWeight(); renderFood(); renderDeficit(); renderPeptides(); renderSyringe(); renderMore(); }
 function resetForms() { resetWeightForm(); resetFoodForm(); resetDoseForm(); resetHealthForm(); }
 $('#fDay').value = todayISO();
+function bootHash() {
+  if (location.hash.startsWith('#import=')) {
+    const raw = decodeURIComponent(location.hash.slice(8));
+    history.replaceState(null, '', '#food'); showTab('food');
+    const p = parseHB(raw);
+    if (p.ok) handleCode(p, raw); else openPastePanel(raw, p.error);
+  } else { const h = location.hash.slice(1).replace(/[^a-z]/g, ''); showTab(h && document.getElementById('tab-' + h) ? h : 'weight'); }
+}
 renderAll(); resetForms(); renderPeptides();
-if (location.hash.startsWith('#import=')) {
-  const raw = decodeURIComponent(location.hash.slice(8));
-  history.replaceState(null, '', '#food'); showTab('food');
-  const p = parseHB(raw);
-  if (p.ok) handleCode(p, raw); else openPastePanel(raw, p.error);
-} else { const h = location.hash.slice(1).replace(/[^a-z]/g, ''); showTab(h && document.getElementById('tab-' + h) ? h : 'weight'); }
+loadBuiltins().then(() => { migrateFoodsFromLog(); renderAll(); bootHash(); }).catch(() => bootHash());
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }

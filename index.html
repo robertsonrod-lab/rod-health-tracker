@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="styles.css?v=2">
+<link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
 <header class="top">
@@ -65,19 +65,35 @@
       <p class="hint">Copy Health Bot's whole estimate message (it contains a code starting with <b>HB1:</b>), then paste it here.</p>
       <label>Health Bot message<textarea id="pasteText" rows="4" placeholder="Paste here"></textarea></label>
       <div id="pastePreview"></div>
+      <div id="pasteItems"></div>
       <label id="pasteTargetWrap" hidden>Attach to<select id="pasteTarget"></select></label>
       <div class="row"><button class="btn primary" type="button" id="pasteSave" disabled>Save to food log</button><button class="btn" type="button" id="pasteCancel">Cancel</button></div>
     </div>
     <form class="card form" id="fForm">
       <h2 id="fFormTitle">Add food</h2>
-      <label>Item<input name="item" required placeholder="Start typing, or pick from My foods" list="foodList" autocomplete="off"></label>
-      <datalist id="foodList"></datalist>
-      <div id="fAmountRow" hidden>
+      <label class="suggest-wrap">Item
+        <input name="item" id="fItem" required placeholder="Start typing, or pick from My foods" autocomplete="off">
+        <div id="fSuggest" class="suggest" hidden></div>
+      </label>
+      <div id="fAmountRow">
         <div class="grid2">
-          <label>Amount<input type="number" name="amt" step="any" min="0" inputmode="decimal" value="1"></label>
-          <label>Unit<select name="amtUnit"></select></label>
+          <label>Amount<input type="number" name="amt" step="any" min="0" inputmode="decimal" placeholder="e.g. 100"></label>
+          <label>Unit<select name="amtUnit">
+            <option value="g">g</option>
+            <option value="ml">ml</option>
+            <option value="piece">piece</option>
+            <option value="serving">serves</option>
+          </select></label>
         </div>
+        <label>Calories are<select name="calMode">
+          <option value="total">The total I ate</option>
+          <option value="100">Per 100 g / 100 ml (label)</option>
+          <option value="serving">Per serve (label)</option>
+          <option value="unit">Per piece / unit (label)</option>
+        </select></label>
         <p class="hint" id="fFoodHint"></p>
+        <p class="hint" id="fLiveCal"></p>
+        <button class="btn sm" type="button" id="fCustomiseBtn" hidden>Customise in My foods</button>
       </div>
       <div class="grid2">
         <label>Calories<input type="number" name="cal" min="0" step="1" inputmode="numeric" placeholder="cal"></label>
@@ -105,7 +121,7 @@
     </form>
     <div class="card"><h2>Recent days</h2><div id="fDays"></div></div>
     <div class="card"><h2>My foods</h2>
-      <p class="hint">Save a food once with its label values. Typing its name when adding food fills in calories and protein, scaled to the amount.</p>
+      <p class="hint">A built-in list of common foods (typical label values, mostly per 100 g) is suggested as you type. Your own My foods entries are used first. Customising a suggested food saves a personal copy on this phone only. When you log a food, an amount box scales the calories to how much you ate.</p>
       <div id="mfList"></div>
       <button class="btn" type="button" id="mfNewBtn">+ Add to My foods</button>
     </div>
@@ -267,6 +283,6 @@
   <button data-tab="more"><span>☰</span>More</button>
 </nav>
 <div id="toast" role="status" aria-live="polite"></div>
-<script src="app.js?v=2"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>
