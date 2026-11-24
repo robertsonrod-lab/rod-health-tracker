@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
 <header class="top">
@@ -48,14 +48,37 @@
   <!-- FOOD -->
   <section id="tab-food" class="tab" hidden>
     <div class="card">
+      <div class="row actions-top">
+        <input type="file" id="mealPhoto" accept="image/*" capture="environment" hidden>
+        <button type="button" class="btn" id="mealPhotoBtn">📷 Add meal photo</button>
+        <button type="button" class="btn primary" id="pasteBtn">📋 Paste from Health Bot</button>
+      </div>
+      <div id="pasteResult"></div>
+      <div id="pendingInfo"></div>
       <label>Day<input type="date" id="fDay"></label>
       <div class="metrics" id="fMetrics"></div>
       <div id="fList"></div>
       <div id="fNote" class="hint"></div>
     </div>
+    <div class="card form" id="pastePanel" hidden>
+      <h2>Paste from Health Bot</h2>
+      <p class="hint">Copy Health Bot's whole estimate message (it contains a code starting with <b>HB1:</b>), then paste it here.</p>
+      <label>Health Bot message<textarea id="pasteText" rows="4" placeholder="Paste here"></textarea></label>
+      <div id="pastePreview"></div>
+      <label id="pasteTargetWrap" hidden>Attach to<select id="pasteTarget"></select></label>
+      <div class="row"><button class="btn primary" type="button" id="pasteSave" disabled>Save to food log</button><button class="btn" type="button" id="pasteCancel">Cancel</button></div>
+    </div>
     <form class="card form" id="fForm">
       <h2 id="fFormTitle">Add food</h2>
-      <label>Item<input name="item" required placeholder="e.g. 250 g rump steak"></label>
+      <label>Item<input name="item" required placeholder="Start typing, or pick from My foods" list="foodList" autocomplete="off"></label>
+      <datalist id="foodList"></datalist>
+      <div id="fAmountRow" hidden>
+        <div class="grid2">
+          <label>Amount<input type="number" name="amt" step="any" min="0" inputmode="decimal" value="1"></label>
+          <label>Unit<select name="amtUnit"></select></label>
+        </div>
+        <p class="hint" id="fFoodHint"></p>
+      </div>
       <div class="grid2">
         <label>Calories<input type="number" name="cal" min="0" step="1" inputmode="numeric" placeholder="cal"></label>
         <label>or kJ<input type="number" name="kj" min="0" step="1" inputmode="numeric" placeholder="kJ"></label>
@@ -70,10 +93,40 @@
         <button type="button" class="btn" id="fShareBtn" hidden>Send photo to Health Bot</button>
         <button type="button" class="btn ghost" id="fPhotoClear" hidden>Remove photo</button>
       </div>
-      <p class="hint" id="fPhotoHint" hidden>This app can't estimate calories from a photo. Type the calories if you know them, or send the photo to Health Bot in chat for an estimate, then come back and enter the number (mark it as Estimate).</p>
+      <p class="hint" id="fPhotoHint" hidden>This app can't estimate calories from a photo. Type the calories if you know them, or send the photo to Health Bot in chat for an estimate, then tap <b>Paste from Health Bot</b> to save the estimate here.</p>
+      <div id="fSaveRow" hidden>
+        <label class="check"><input type="checkbox" name="saveFood"> Save to My foods (fills in automatically next time)</label>
+        <div class="grid2" id="fSaveFields" hidden>
+          <label>The values above are for<input type="number" name="svSize" step="any" min="0" value="1" inputmode="decimal"></label>
+          <label>Unit<select name="svUnit"><option value="piece">piece / serve</option><option value="g">g</option><option value="ml">ml</option></select></label>
+        </div>
+      </div>
       <div class="row"><button class="btn primary" type="submit">Save food</button><button class="btn" type="button" data-cancel hidden>Cancel edit</button></div>
     </form>
     <div class="card"><h2>Recent days</h2><div id="fDays"></div></div>
+    <div class="card"><h2>My foods</h2>
+      <p class="hint">Save a food once with its label values. Typing its name when adding food fills in calories and protein, scaled to the amount.</p>
+      <div id="mfList"></div>
+      <button class="btn" type="button" id="mfNewBtn">+ Add to My foods</button>
+    </div>
+    <form class="card form" id="mfForm" hidden>
+      <h2 id="mfTitle">Add to My foods</h2>
+      <label>Name<input name="name" required placeholder="e.g. Muscle Nation Custard bar"></label>
+      <div class="grid2">
+        <label>Serving size<input type="number" name="svSize" step="any" min="0" inputmode="decimal" required value="1"></label>
+        <label>Serving unit<select name="svUnit"><option value="g">g</option><option value="ml">ml</option><option value="piece">piece</option></select></label>
+        <label class="span2">Label values are<select name="basis"><option value="serving">Per serving</option><option value="100">Per 100 g / 100 ml</option></select></label>
+        <label>Calories<input type="number" name="cal" step="any" min="0" inputmode="decimal"></label>
+        <label>or kJ<input type="number" name="kj" step="any" min="0" inputmode="decimal"></label>
+        <label>Protein (g)<input type="number" name="protein" step="any" min="0" inputmode="decimal"></label>
+        <label>Fat (g, optional)<input type="number" name="fat" step="any" min="0" inputmode="decimal"></label>
+        <label>Carbs (g, optional)<input type="number" name="carbs" step="any" min="0" inputmode="decimal"></label>
+        <label>Source<select name="source"><option value="label">From label</option><option value="estimate">Estimate</option></select></label>
+      </div>
+      <p class="hint" id="mfPreview"></p>
+      <div class="row"><button class="btn primary" type="submit">Save food</button><button class="btn" type="button" data-cancel>Cancel</button></div>
+    </form>
+
   </section>
 
   <!-- DEFICIT -->
@@ -214,6 +267,6 @@
   <button data-tab="more"><span>☰</span>More</button>
 </nav>
 <div id="toast" role="status" aria-live="polite"></div>
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

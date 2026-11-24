@@ -67,3 +67,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 #toast.show{opacity:.95}
 details summary{cursor:pointer;color:var(--accent);margin:8px 0}
 .syr svg{width:100%;max-width:560px;display:block}
+.actions-top{margin-bottom:10px}.actions-top .btn{flex:1}
+label.check{flex-direction:row;align-items:center;gap:8px;font-size:14px;color:var(--text);margin-bottom:8px}
+label.check input{width:auto;min-height:0}
+.tag.pending{color:var(--warn);border-color:var(--warn);font-weight:700}

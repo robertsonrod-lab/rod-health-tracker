@@ -51,16 +51,16 @@ function emptyState() {
   return {
     version: 1,
     settings: { goal: null, height: null, age: null, sex: 'male', activity: 'light', calMin: 1900, calMax: 2100, protein: 150, bandLow: null, bandHigh: null },
-    weights: [], food: [], dayNotes: {}, peptides: [], doses: [], schedule: [], health: [], profile: [],
+    weights: [], food: [], foods: [], dayNotes: {}, peptides: [], doses: [], schedule: [], health: [], profile: [], importedCodes: [],
   };
 }
 function normalise(s) {
   const base = emptyState();
   const out = Object.assign(base, s || {});
   out.settings = Object.assign(emptyState().settings, (s && s.settings) || {});
-  for (const k of ['weights', 'food', 'peptides', 'doses', 'schedule', 'health', 'profile']) if (!Array.isArray(out[k])) out[k] = [];
+  for (const k of ['weights', 'food', 'foods', 'peptides', 'doses', 'schedule', 'health', 'profile', 'importedCodes']) if (!Array.isArray(out[k])) out[k] = [];
   if (!out.dayNotes || typeof out.dayNotes !== 'object') out.dayNotes = {};
-  for (const k of ['weights', 'food', 'peptides', 'doses', 'health', 'profile']) out[k].forEach(x => { if (!x.id) x.id = uid(); });
+  for (const k of ['weights', 'food', 'foods', 'peptides', 'doses', 'health', 'profile']) out[k].forEach(x => { if (!x.id) x.id = uid(); });
   return out;
 }
 let S;
@@ -69,7 +69,7 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
   catch (e) { toast('Could not save: phone storage is full. Remove some meal photos or export and erase.'); return false; }
 }
-const isEmpty = () => !S.weights.length && !S.food.length && !S.doses.length && !S.health.length && !S.peptides.length;
+const isEmpty = () => !S.weights.length && !S.food.length && !S.foods.length && !S.doses.length && !S.health.length && !S.peptides.length;
 const sortedWeights = () => S.weights.slice().sort((a, b) => a.date.localeCompare(b.date));
 
 function toast(msg) {
@@ -290,11 +290,12 @@ function renderFood() {
     metric(t.hasProtein ? Math.round(t.protein) + ' g' : '—', `Protein vs ${Number.isFinite(pt) ? pt : '?'} g`, t.hasProtein && Number.isFinite(pt) ? (pt - t.protein > 0 ? `${Math.round(pt - t.protein)} g to go` : 'Target hit') : '', t.hasProtein && t.protein >= pt ? 'good' : '');
   $('#fList').innerHTML = t.items.length ? t.items.map(i => `
     <div class="item">${i.photo ? `<img class="thumb" src="${i.photo}" alt="Meal photo">` : ''}
-      <div class="grow"><div><b>${esc(i.item)}</b></div>
-        <div class="sub">${Number.isFinite(i.cal) ? `${fmtN(i.cal)} cal · ${fmtN(i.cal * KJ)} kJ` : 'cal not recorded'}${Number.isFinite(i.protein) ? ` · ${i.protein} g protein` : ''}
+      <div class="grow"><div><b>${esc(i.item)}</b>${i.pending ? ' <span class="tag pending">awaiting estimate</span>' : ''}${i.time ? ` <span class="sub">${esc(i.time)}</span>` : ''}</div>
+        <div class="sub">${Number.isFinite(i.qty) ? `${r2(i.qty)} ${i.qtyUnit === 'serving' ? (i.qty === 1 ? 'serve' : 'serves') : esc(i.qtyUnit || '')} · ` : ''}${Number.isFinite(i.cal) ? `${fmtN(i.cal)} cal · ${fmtN(i.cal * KJ)} kJ` : i.pending ? 'calories pending' : 'cal not recorded'}${Number.isFinite(i.protein) ? ` · ${i.protein} g protein` : ''}
           ${i.source === 'label' ? '<span class="tag">label</span>' : i.source === 'estimate' ? '<span class="tag est">estimate</span>' : '<span class="tag">not recorded</span>'}</div>
         <div class="row" style="margin-top:4px"><button class="btn sm" data-fedit="${i.id}">Edit</button>${i.photo ? `<button class="btn sm" data-fshare="${i.id}">Send photo to Health Bot</button>` : ''}<button class="btn sm danger" data-fdel="${i.id}">Delete</button></div>
       </div></div>`).join('') : '<p class="hint">Nothing logged for this day.</p>';
+  renderFoodExtras();
   const note = S.dayNotes[date];
   $('#fNote').textContent = note && note.note ? note.note : '';
   const dates = foodDates().slice(0, 21);
@@ -360,6 +361,7 @@ $('#fShareBtn').addEventListener('click', () => {
 function resetFoodForm() {
   fEditId = null; const f = $('#fForm'); f.reset(); f.date.value = $('#fDay').value || todayISO(); f.source.value = 'label';
   setPhoto(null); $('#fFormTitle').textContent = 'Add food'; $('[data-cancel]', f).hidden = true;
+  fSel = null; $('#fAmountRow').hidden = true; f.amt.value = 1; $('#fSaveFields').hidden = true; updateSaveRow();
 }
 $('#fForm').addEventListener('submit', e => {
   e.preventDefault();
@@ -368,12 +370,21 @@ $('#fForm').addEventListener('submit', e => {
   const rec = { date: f.date.value, item: f.item.value.trim(), cal: Number.isFinite(cal) ? Math.round(cal) : null, protein: Number.isFinite(protein) ? r2(protein) : null, source: f.source.value, photo: fPhotoData || null };
   if (!rec.item || !rec.date) return;
   if (rec.cal === null) rec.source = rec.source === 'label' ? 'not recorded' : rec.source;
-  if (fEditId) Object.assign(S.food.find(x => x.id === fEditId), rec); else S.food.push(Object.assign({ id: uid() }, rec));
+  rec.pending = rec.cal === null && !!rec.photo;
+  const amt = num(f.amt.value);
+  if (fSel && Number.isFinite(amt)) { rec.foodId = fSel.id; rec.qty = amt; rec.qtyUnit = f.amtUnit.value; } else { rec.foodId = null; rec.qty = null; rec.qtyUnit = null; }
+  let savedFood = '';
+  if (!fSel && !fEditId && f.saveFood.checked && rec.cal !== null) {
+    const sv = num(f.svSize.value) > 0 ? num(f.svSize.value) : 1;
+    const nf = { id: uid(), name: rec.item, servingSize: sv, unit: f.svUnit.value, cal: rec.cal, protein: rec.protein, fat: null, carbs: null, source: rec.source === 'label' ? 'label' : 'estimate' };
+    S.foods.push(nf); rec.foodId = nf.id; rec.qty = 1; rec.qtyUnit = 'serving'; savedFood = ' Added to My foods.';
+  }
+  if (fEditId) Object.assign(S.food.find(x => x.id === fEditId), rec); else S.food.push(Object.assign({ id: uid(), time: rec.date === todayISO() ? nowTime() : '' }, rec));
   if (!save()) return;
   $('#fDay').value = rec.date;
   const t = dayTotals(rec.date);
   resetFoodForm(); renderAll();
-  toast(`Saved. ${t.hasCal ? 'Day total ' + fmtN(t.cal) + ' cal (' + fmtN(t.cal * KJ) + ' kJ).' : ''}`);
+  toast(`Saved. ${t.hasCal ? 'Day total ' + fmtN(t.cal) + ' cal (' + fmtN(t.cal * KJ) + ' kJ).' : ''}${savedFood}`);
 });
 $('#fForm [data-cancel]').addEventListener('click', resetFoodForm);
 $('#fList').addEventListener('click', e => {
@@ -383,11 +394,264 @@ $('#fList').addEventListener('click', e => {
     fEditId = i.id; const f = $('#fForm');
     f.item.value = i.item; f.cal.value = Number.isFinite(i.cal) ? i.cal : ''; f.kj.value = Number.isFinite(i.cal) ? Math.round(i.cal * KJ) : '';
     f.protein.value = Number.isFinite(i.protein) ? i.protein : ''; f.source.value = i.source === 'label' ? 'label' : 'estimate'; f.date.value = i.date;
-    setPhoto(i.photo || null); $('#fFormTitle').textContent = 'Edit food'; $('[data-cancel]', f).hidden = false; f.scrollIntoView({ behavior: 'smooth' });
+    setPhoto(i.photo || null);
+    const lf = i.foodId && S.foods.find(x => x.id === i.foodId);
+    if (lf) { selectFood(lf, false); if (Number.isFinite(i.qty)) { f.amt.value = i.qty; f.amtUnit.value = i.qtyUnit; } updateFoodHint(); } else { fSel = null; $('#fAmountRow').hidden = true; }
+    $('#fFormTitle').textContent = 'Edit food'; $('[data-cancel]', f).hidden = false; f.scrollIntoView({ behavior: 'smooth' });
   }
   if (del) { const i = S.food.find(x => x.id === del.dataset.fdel); if (i && confirm(`Delete "${i.item}"?`)) { S.food = S.food.filter(x => x !== i); save(); renderAll(); } }
-  if (sh) { const i = S.food.find(x => x.id === sh.dataset.fshare); if (i && i.photo) sharePhoto(dataURLtoFile(i.photo, 'meal.jpg'), i.item); }
+  if (sh) { const i = S.food.find(x => x.id === sh.dataset.fshare); if (i && i.photo) sharePhoto(lastPhotoFile && lastPhotoFile.id === i.id ? lastPhotoFile.file : dataURLtoFile(i.photo, 'meal.jpg'), i.item); }
 });
+
+/* ========== MY FOODS (database) ========== */
+let fSel = null, mfEditId = null;
+function nowTime() {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+}
+function foodByName(n) { const k = String(n || '').trim().toLowerCase(); return k ? S.foods.find(f => f.name.trim().toLowerCase() === k) || null : null; }
+function unitLabel(u) { return u === 'piece' ? 'piece' : u; }
+function scaleFood(fd, amt, unit) {
+  const factor = unit === 'serving' ? amt : amt / fd.servingSize;
+  const sc = v => (Number.isFinite(v) ? v * factor : null);
+  return { cal: sc(fd.cal), protein: sc(fd.protein), fat: sc(fd.fat), carbs: sc(fd.carbs) };
+}
+function foodSummary(fd) {
+  const bits = [`${r2(fd.servingSize)} ${unitLabel(fd.unit)} serve`, Number.isFinite(fd.cal) ? `${fmtN(fd.cal)} cal / ${fmtN(fd.cal * KJ)} kJ` : 'cal ?'];
+  if (Number.isFinite(fd.protein)) bits.push(`${r2(fd.protein)} g protein`);
+  if (Number.isFinite(fd.fat)) bits.push(`${r2(fd.fat)} g fat`);
+  if (Number.isFinite(fd.carbs)) bits.push(`${r2(fd.carbs)} g carbs`);
+  if (fd.unit !== 'piece' && Number.isFinite(fd.cal) && fd.servingSize > 0) bits.push(`${fmtN(fd.cal / fd.servingSize * 100)} cal per 100 ${fd.unit}`);
+  return bits.join(' · ');
+}
+function selectFood(fd, fill = true) {
+  const f = $('#fForm'); fSel = fd;
+  if (fill && f.item.value !== fd.name) f.item.value = fd.name;
+  f.amtUnit.innerHTML = `<option value="serving">serves (${r2(fd.servingSize)} ${unitLabel(fd.unit)} each)</option>` + (fd.unit !== 'piece' ? `<option value="${fd.unit}">${fd.unit}</option>` : '');
+  f.amt.value = 1; f.amtUnit.value = 'serving';
+  $('#fAmountRow').hidden = false;
+  if (fill) fillFromFood();
+  updateSaveRow();
+}
+function fillFromFood() {
+  if (!fSel) return;
+  const f = $('#fForm'), amt = num(f.amt.value);
+  if (!Number.isFinite(amt)) return;
+  const v = scaleFood(fSel, amt, f.amtUnit.value);
+  f.cal.value = Number.isFinite(v.cal) ? Math.round(v.cal) : '';
+  f.kj.value = Number.isFinite(v.cal) ? Math.round(v.cal * KJ) : '';
+  f.protein.value = Number.isFinite(v.protein) ? r2(v.protein) : '';
+  f.source.value = fSel.source === 'label' ? 'label' : 'estimate';
+  updateFoodHint();
+}
+function updateFoodHint() { if (fSel) $('#fFoodHint').textContent = `From My foods: ${foodSummary(fSel)}. You can still adjust the numbers.`; }
+function updateSaveRow() {
+  const f = $('#fForm');
+  $('#fSaveRow').hidden = !!fSel || !!fEditId || !f.item.value.trim();
+}
+$('#fForm').item.addEventListener('input', e => {
+  const fd = foodByName(e.target.value);
+  if (fd && fd !== fSel) selectFood(fd);
+  else if (!fd && fSel) { fSel = null; $('#fAmountRow').hidden = true; }
+  updateSaveRow();
+});
+$('#fForm').amt.addEventListener('input', fillFromFood);
+$('#fForm').amtUnit.addEventListener('change', e => {
+  // keep the same quantity when switching units
+  const f = $('#fForm'), a = num(f.amt.value);
+  if (fSel && Number.isFinite(a)) f.amt.value = e.target.value === 'serving' ? r2(a / fSel.servingSize) : r2(a * fSel.servingSize);
+  fillFromFood();
+});
+$('#fForm').saveFood.addEventListener('change', e => { $('#fSaveFields').hidden = !e.target.checked; });
+
+function renderFoodExtras() {
+  const foods = S.foods.slice().sort((a, b) => a.name.localeCompare(b.name));
+  $('#foodList').innerHTML = foods.map(fd => `<option value="${esc(fd.name)}">`).join('');
+  $('#mfList').innerHTML = foods.length ? foods.map(fd => `<div class="item"><div class="grow"><div><b>${esc(fd.name)}</b> ${fd.source === 'label' ? '<span class="tag">label</span>' : '<span class="tag est">estimate</span>'}</div>
+    <div class="sub">${esc(foodSummary(fd))}</div>
+    <div class="row" style="margin-top:4px"><button class="btn sm" type="button" data-mfuse="${fd.id}">Log it</button><button class="btn sm" type="button" data-mfedit="${fd.id}">Edit</button><button class="btn sm danger" type="button" data-mfdel="${fd.id}">Delete</button></div></div></div>`).join('')
+    : '<p class="hint">No saved foods yet.</p>';
+  const pend = S.food.filter(i => i.pending);
+  $('#pendingInfo').innerHTML = pend.length ? `<div class="callout warn">${pend.length} photo meal${pend.length > 1 ? 's' : ''} awaiting an estimate (${pend.map(p => fmtDate(p.date) + (p.time ? ' ' + esc(p.time) : '')).join(', ')}). Send the photo to Health Bot, then tap <b>Paste from Health Bot</b>.</div>` : '';
+}
+function openMfForm(fd) {
+  mfEditId = fd ? fd.id : null; const f = $('#mfForm'); f.reset(); f.hidden = false;
+  $('#mfTitle').textContent = fd ? 'Edit food' : 'Add to My foods';
+  if (fd) {
+    f.name.value = fd.name; f.svSize.value = fd.servingSize; f.svUnit.value = fd.unit; f.basis.value = 'serving';
+    f.cal.value = Number.isFinite(fd.cal) ? r2(fd.cal) : ''; f.kj.value = Number.isFinite(fd.cal) ? Math.round(fd.cal * KJ) : '';
+    f.protein.value = fd.protein ?? ''; f.fat.value = fd.fat ?? ''; f.carbs.value = fd.carbs ?? ''; f.source.value = fd.source || 'label';
+  }
+  mfPreview(); f.scrollIntoView({ behavior: 'smooth' });
+}
+function mfValues() {
+  const f = $('#mfForm'), sv = num(f.svSize.value), unit = f.svUnit.value, per100 = f.basis.value === '100';
+  if (per100 && unit === 'piece') return { error: 'Per 100 g/ml needs a serving unit of g or ml.' };
+  if (!(sv > 0)) return { error: 'Enter a serving size.' };
+  const factor = per100 ? sv / 100 : 1;
+  const g = k => { const v = num(f[k].value); return Number.isFinite(v) ? Math.round(v * factor * 100) / 100 : null; };
+  return { name: f.name.value.trim(), servingSize: sv, unit, cal: g('cal'), protein: g('protein'), fat: g('fat'), carbs: g('carbs'), source: f.source.value };
+}
+function mfPreview() {
+  const v = mfValues();
+  $('#mfPreview').textContent = v.error ? v.error : v.cal !== null ? `Saved as per serve: ${foodSummary(v)}` : 'Enter calories or kJ.';
+}
+$('#mfForm').addEventListener('input', e => {
+  const f = $('#mfForm');
+  if (e.target.name === 'cal') { const v = num(f.cal.value); f.kj.value = Number.isFinite(v) ? Math.round(v * KJ) : ''; }
+  if (e.target.name === 'kj') { const v = num(f.kj.value); f.cal.value = Number.isFinite(v) ? r2(v / KJ) : ''; }
+  mfPreview();
+});
+$('#mfForm').addEventListener('change', mfPreview);
+$('#mfForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = mfValues(); if (v.error) { toast(v.error); return; }
+  if (!v.name || v.cal === null) { toast('Name and calories are needed.'); return; }
+  const dupe = foodByName(v.name);
+  if (dupe && dupe.id !== mfEditId && !confirm(`"${dupe.name}" is already in My foods. Replace it?`)) return;
+  if (mfEditId) Object.assign(S.foods.find(x => x.id === mfEditId), v);
+  else if (dupe) Object.assign(dupe, v);
+  else S.foods.push(Object.assign({ id: uid() }, v));
+  if (!save()) return;
+  $('#mfForm').hidden = true; mfEditId = null; renderAll(); toast(`Saved ${v.name} to My foods`);
+});
+$('#mfForm [data-cancel]').addEventListener('click', () => { $('#mfForm').hidden = true; mfEditId = null; });
+$('#mfNewBtn').addEventListener('click', () => openMfForm(null));
+$('#mfList').addEventListener('click', e => {
+  const u = e.target.closest('[data-mfuse]'), ed = e.target.closest('[data-mfedit]'), del = e.target.closest('[data-mfdel]');
+  if (u) { const fd = S.foods.find(x => x.id === u.dataset.mfuse); if (!fd) return; resetFoodForm(); const f = $('#fForm'); f.item.value = fd.name; selectFood(fd); f.scrollIntoView({ behavior: 'smooth' }); f.amt.focus(); }
+  if (ed) openMfForm(S.foods.find(x => x.id === ed.dataset.mfedit));
+  if (del) { const fd = S.foods.find(x => x.id === del.dataset.mfdel); if (fd && confirm(`Delete ${fd.name} from My foods? Logged entries stay.`)) { S.foods = S.foods.filter(x => x !== fd); save(); renderAll(); } }
+});
+
+/* ========== MEAL PHOTO -> PENDING MEAL ========== */
+$('#mealPhotoBtn').addEventListener('click', () => $('#mealPhoto').click());
+$('#mealPhoto').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0]; e.target.value = ''; if (!file) return;
+  try {
+    const photo = await compressImage(file);
+    const date = $('#fDay').value || todayISO();
+    const entry = { id: uid(), mealId: uid(), date, time: date === todayISO() ? nowTime() : '', item: 'Meal photo', cal: null, protein: null, source: 'estimate', photo, pending: true };
+    S.food.push(entry);
+    if (!save()) { S.food.pop(); return; }
+    lastPhotoFile = { id: entry.id, file };
+    renderAll();
+    toast('Photo meal saved, awaiting estimate. Tap "Send photo to Health Bot" on it.');
+  } catch (err) { toast(err.message); }
+});
+let lastPhotoFile = null;
+
+/* ========== HEALTH BOT PASTE BRIDGE (HB1 codes) ==========
+   Format: "HB1:" + base64url(UTF-8 JSON), JSON = {t:'meal', d:'YYYY-MM-DD', time?:'HH:MM', items:[{n, cal, p?, src?:'estimate'|'label'}], note?}
+   The token may appear anywhere in pasted text. */
+function b64urlDecode(str) {
+  let b = str.replace(/-/g, '+').replace(/_/g, '/'); while (b.length % 4) b += '=';
+  const bin = atob(b), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+function b64urlEncode(s) {
+  const bytes = new TextEncoder().encode(s); let bin = '';
+  bytes.forEach(b => { bin += String.fromCharCode(b); });
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function makeHB(obj) { return 'HB1:' + b64urlEncode(JSON.stringify(obj)); }
+function parseHB(text) {
+  const m = String(text || '').match(/HB1:([A-Za-z0-9_-]+)/);
+  if (!m) return { ok: false, error: 'No Health Bot code (starting HB1:) found in that text.' };
+  let o;
+  try { o = JSON.parse(b64urlDecode(m[1])); } catch (e) { return { ok: false, error: 'The HB1 code is damaged or incomplete. Copy the whole message again.' }; }
+  if (!o || o.t !== 'meal') return { ok: false, error: 'Unknown code type.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(o.d || '')) return { ok: false, error: 'The code has no valid date.' };
+  if (!Array.isArray(o.items) || !o.items.length) return { ok: false, error: 'The code has no food items.' };
+  const items = [];
+  for (const it of o.items) {
+    const cal = Number(it.cal), p = it.p === undefined || it.p === null ? null : Number(it.p);
+    if (!it.n || !Number.isFinite(cal) || cal < 0 || (p !== null && !Number.isFinite(p))) return { ok: false, error: 'An item in the code is missing a name or calories.' };
+    items.push({ n: String(it.n).slice(0, 120), cal: Math.round(cal), p: p === null ? null : r2(p), src: it.src === 'label' ? 'label' : 'estimate' });
+  }
+  const time = /^\d{2}:\d{2}$/.test(o.time || '') ? o.time : '';
+  return { ok: true, code: m[0], data: { d: o.d, time, items, note: o.note ? String(o.note).slice(0, 300) : '' } };
+}
+function pendingCandidates(date) {
+  const key = i => i.date + ' ' + (i.time || '') + ' ' + i.id;
+  const pend = S.food.filter(i => i.pending);
+  const same = pend.filter(i => i.date === date).sort((a, b) => key(b).localeCompare(key(a)));
+  const other = pend.filter(i => i.date !== date).sort((a, b) => key(b).localeCompare(key(a)));
+  return { same, other };
+}
+function codeSummary(d) {
+  const cal = d.items.reduce((a, i) => a + i.cal, 0), p = d.items.reduce((a, i) => a + (i.p || 0), 0);
+  return { cal, p, text: `${d.items.length} item${d.items.length > 1 ? 's' : ''}: ${d.items.map(i => `${esc(i.n)} ${fmtN(i.cal)} cal`).join(', ')} · total ${fmtN(cal)} cal (${fmtN(cal * KJ)} kJ), ${r2(p)} g protein` };
+}
+function applyCode(parsed, targetId) {
+  const d = parsed.data, target = targetId ? S.food.find(i => i.id === targetId && i.pending) : null;
+  const date = target ? target.date : d.d, mealId = (target && target.mealId) || uid();
+  const time = d.time || (target && target.time) || '';
+  const recs = d.items.map(it => ({ item: it.n, cal: it.cal, protein: it.p, source: it.src, date, time, mealId, pending: false, fromHB: true }));
+  if (d.note) recs[0].note = d.note;
+  if (target) { Object.assign(target, recs[0]); recs.shift(); }
+  recs.forEach(r => S.food.push(Object.assign({ id: uid(), photo: null }, r)));
+  S.importedCodes = S.importedCodes.concat([parsed.code]).slice(-200);
+  if (!save()) return;
+  const sm = codeSummary(d), t = dayTotals(date), st = S.settings;
+  const lo = num(st.calMin), hi = num(st.calMax);
+  const left = Number.isFinite(hi) ? (t.cal > hi ? `${fmtN(t.cal - hi)} cal over the top of your target` : `${fmtN(Math.max(0, lo - t.cal))}–${fmtN(hi - t.cal)} cal left`) : '';
+  $('#fDay').value = date; $('#pastePanel').hidden = true;
+  renderAll(); showTab('food');
+  $('#pasteResult').innerHTML = `<div class="callout">✅ Saved ${target ? 'to your photo meal' : 'as a new meal'} on ${fmtDate(date)}: ${sm.text}.<br>Day total now ${fmtN(t.cal)} cal (${fmtN(t.cal * KJ)} kJ)${t.hasProtein ? `, ${Math.round(t.protein)} g protein` : ''}${left ? '; ' + left : ''}.</div>`;
+  toast(`Saved ${fmtN(sm.cal)} cal from Health Bot`);
+}
+let pasteParsed = null;
+function fillPasteTarget(parsed) {
+  const { same, other } = pendingCandidates(parsed.data.d);
+  const nth = ['newest', '2nd newest', '3rd newest'];
+  const opt = (i, k) => `<option value="${i.id}">Photo meal ${fmtDate(i.date)}${i.time ? ' ' + esc(i.time) : ''}${k !== null ? ' (' + (nth[k] || (k + 1) + 'th newest') + ')' : ''}</option>`;
+  $('#pasteTarget').innerHTML = same.map((i, k) => opt(i, same.length > 1 ? k : null)).join('') + other.map(i => opt(i, null)).join('') + `<option value="">New meal on ${fmtDate(parsed.data.d)} (no photo)</option>`;
+  $('#pasteTargetWrap').hidden = false;
+}
+function showPasteParsed(parsed, warn) {
+  pasteParsed = parsed;
+  $('#pastePreview').innerHTML = `<div class="callout ${warn ? 'warn' : ''}">${warn ? esc(warn) + '<br>' : ''}Meal on ${fmtDate(parsed.data.d)}${parsed.data.time ? ' at ' + esc(parsed.data.time) : ''}: ${codeSummary(parsed.data).text}${parsed.data.note ? '<br>Note: ' + esc(parsed.data.note) : ''}</div>`;
+  fillPasteTarget(parsed);
+  $('#pasteSave').disabled = false;
+}
+function openPastePanel(text, msg) {
+  const panel = $('#pastePanel'); panel.hidden = false; showTab('food');
+  $('#pasteText').value = text || ''; pasteParsed = null; $('#pasteSave').disabled = true; $('#pasteTargetWrap').hidden = true;
+  $('#pastePreview').innerHTML = msg ? `<div class="callout warn">${esc(msg)}</div>` : '';
+  panel.scrollIntoView({ behavior: 'smooth' }); setTimeout(() => $('#pasteText').focus(), 300);
+}
+// Decide whether we can save straight away or need the user to pick.
+function handleCode(parsed, rawText) {
+  const { same, other } = pendingCandidates(parsed.data.d);
+  if (S.importedCodes.includes(parsed.code)) {
+    openPastePanel(rawText, null); showPasteParsed(parsed, 'This code was already imported once. Save again only if it is a different meal.'); return;
+  }
+  if (same.length === 1 && other.length === 0) return applyCode(parsed, same[0].id);
+  if (same.length === 0 && other.length === 0) return applyCode(parsed, null);
+  if (same.length === 1) return applyCode(parsed, same[0].id); // most recent pending meal for that date
+  openPastePanel(rawText, null); showPasteParsed(parsed, 'More than one photo meal is waiting for that day. Pick which one this estimate is for.');
+}
+$('#pasteBtn').addEventListener('click', async () => {
+  $('#pasteResult').innerHTML = '';
+  let text = '';
+  try { if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText(); } catch (e) { text = ''; }
+  const p = parseHB(text);
+  if (p.ok) handleCode(p, text);
+  else openPastePanel('', text ? p.error : 'Paste Health Bot\'s message below (long-press, then Paste).');
+});
+$('#pasteText').addEventListener('input', () => {
+  const raw = $('#pasteText').value, p = parseHB(raw);
+  if (!raw.trim()) { $('#pastePreview').innerHTML = ''; $('#pasteSave').disabled = true; return; }
+  if (!p.ok) { pasteParsed = null; $('#pasteSave').disabled = true; $('#pasteTargetWrap').hidden = true; $('#pastePreview').innerHTML = `<div class="callout warn">${esc(p.error)}</div>`; return; }
+  const { same, other } = pendingCandidates(p.data.d);
+  const dup = S.importedCodes.includes(p.code);
+  if (!dup && (same.length + other.length <= 1 || same.length === 1)) handleCode(p, raw); // unambiguous: save automatically
+  else showPasteParsed(p, dup ? 'This code was already imported once. Save again only if it is a different meal.' : 'More than one photo meal is waiting. Pick which one this estimate is for.');
+});
+$('#pasteSave').addEventListener('click', () => { if (pasteParsed) applyCode(pasteParsed, $('#pasteTarget').value || null); });
+$('#pasteCancel').addEventListener('click', () => { $('#pastePanel').hidden = true; pasteParsed = null; });
+window.HB = { parseHB, makeHB }; // for testing / console use
 
 /* ========== DEFICIT ========== */
 function weightOn(iso) {
@@ -650,12 +914,13 @@ $('#exportBtn').addEventListener('click', async () => {
 $('#importBtn').addEventListener('click', () => $('#importFile').click());
 function mergeById(a, b) { const m = new Map(a.map(x => [x.id, x])); b.forEach(x => m.set(x.id, x)); return Array.from(m.values()); }
 function importData(obj) {
-  if (!obj || typeof obj !== 'object' || !['weights', 'food', 'doses', 'peptides', 'health'].some(k => Array.isArray(obj[k]))) throw new Error('That file is not a Health Tracker data file.');
+  if (!obj || typeof obj !== 'object' || !['weights', 'food', 'foods', 'doses', 'peptides', 'health'].some(k => Array.isArray(obj[k]))) throw new Error('That file is not a Health Tracker data file.');
   const inc = normalise(obj);
   if (isEmpty() || confirm('Replace everything on this phone with the imported file?\n\nOK = replace all\nCancel = merge (imported entries win on the same day)')) { S = inc; }
   else {
     const byDate = new Map(S.weights.map(w => [w.date, w])); inc.weights.forEach(w => byDate.set(w.date, w)); S.weights = Array.from(byDate.values());
-    for (const k of ['food', 'peptides', 'doses', 'health', 'profile']) S[k] = mergeById(S[k], inc[k]);
+    for (const k of ['food', 'foods', 'peptides', 'doses', 'health', 'profile']) S[k] = mergeById(S[k], inc[k]);
+    S.importedCodes = Array.from(new Set(S.importedCodes.concat(inc.importedCodes))).slice(-200);
     const sk = new Set(S.schedule.map(s => s.peptideId + s.date)); inc.schedule.forEach(s => { if (!sk.has(s.peptideId + s.date)) S.schedule.push(s); });
     S.dayNotes = Object.assign({}, S.dayNotes, inc.dayNotes);
     for (const [k, v] of Object.entries(inc.settings)) if (v !== null && v !== undefined && (S.settings[k] === null || S.settings[k] === undefined)) S.settings[k] = v;
@@ -665,7 +930,7 @@ $('#importFile').addEventListener('change', async e => {
   const file = e.target.files && e.target.files[0]; if (!file) return;
   try {
     importData(JSON.parse(await file.text()));
-    if (save()) { pSel = null; $('#dForm').dataset.init = ''; renderAll(); resetForms(); toast(`Imported: ${S.weights.length} weights, ${S.food.length} food items, ${S.doses.length} doses.`); }
+    if (save()) { pSel = null; $('#dForm').dataset.init = ''; renderAll(); resetForms(); toast(`Imported: ${S.weights.length} weights, ${S.food.length} food items, ${S.foods.length} saved foods, ${S.doses.length} doses.`); }
   } catch (err) { toast(err.message || 'Could not read that file.'); }
   e.target.value = '';
 });
@@ -680,7 +945,12 @@ function renderAll() { renderBanner(); renderWeight(); renderFood(); renderDefic
 function resetForms() { resetWeightForm(); resetFoodForm(); resetDoseForm(); resetHealthForm(); }
 $('#fDay').value = todayISO();
 renderAll(); resetForms(); renderPeptides();
-{ const h = location.hash.slice(1).replace(/[^a-z]/g, ''); showTab(h && document.getElementById('tab-' + h) ? h : 'weight'); }
+if (location.hash.startsWith('#import=')) {
+  const raw = decodeURIComponent(location.hash.slice(8));
+  history.replaceState(null, '', '#food'); showTab('food');
+  const p = parseHB(raw);
+  if (p.ok) handleCode(p, raw); else openPastePanel(raw, p.error);
+} else { const h = location.hash.slice(1).replace(/[^a-z]/g, ''); showTab(h && document.getElementById('tab-' + h) ? h : 'weight'); }
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
