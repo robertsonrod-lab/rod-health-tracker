@@ -45,7 +45,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .seg button{flex:1;font:inherit;font-size:14px;padding:8px;border-radius:9px;border:1px solid var(--border);background:var(--card);color:var(--text)}
 .seg button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .tabs{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom);z-index:5}
-.tabs button{flex:1;background:none;border:0;color:var(--muted);font:inherit;font-size:11px;padding:6px 0 8px;display:flex;flex-direction:column;align-items:center;gap:2px}
+.tabs button{flex:1;background:none;border:0;color:var(--muted);font:inherit;font-size:10px;padding:6px 1px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1.15;text-align:center}
 .tabs button span{font-size:20px}
 .tabs button.on{color:var(--accent);font-weight:700}
 .photo-box{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
@@ -80,5 +80,9 @@ label.check input{width:auto;min-height:0}
 #fLiveCal{font-weight:600;color:var(--text)}
 .paste-item{align-items:center}
 .paste-item .qtybox{flex:0 0 170px;min-width:150px}
-#pInfo .disclaimer{margin-top:8px}
 #sPresets{flex-wrap:wrap;margin-bottom:10px}
+#discList details{border-bottom:1px solid var(--border);padding:4px 0}
+#discList details:last-child{border-bottom:0}
+#discList summary{cursor:pointer;color:var(--text);font-weight:600;padding:10px 4px;min-height:44px;display:flex;align-items:center}
+#discList details p{margin:0 4px 12px;font-size:14px;color:var(--muted)}
+#discIntro{margin-bottom:12px}

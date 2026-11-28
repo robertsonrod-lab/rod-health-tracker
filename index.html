@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="styles.css?v=6">
+<link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
 <header class="top">
@@ -168,7 +168,7 @@
   <section id="tab-peptides" class="tab" hidden>
     <div class="card">
       <label>Peptide<select id="pSel"></select></label>
-      <p class="hint">Pick a peptide to log a dose. A built-in list of common peptides is included, with typical reference doses you can edit.</p>
+      <p class="hint">Pick a peptide to log a dose. The dose field fills with a typical amount, which you can edit.</p>
       <div id="pInfo"></div>
       <div class="row"><button class="btn" id="pEditBtn" type="button">Edit peptide</button><button class="btn" id="pNewBtn" type="button">New peptide</button></div>
     </div>
@@ -232,6 +232,15 @@
       <p class="hint">Premixed 10 mg/mL: 1 mg is 0.1 mL (10 units); 2 mg is 0.2 mL (20 units). Always double-check against your prescriber's instructions.</p></div>
   </section>
 
+  <!-- DISCLAIMERS -->
+  <section id="tab-disclaimers" class="tab" hidden>
+    <div class="card">
+      <h2>Disclaimers</h2>
+      <p class="hint" id="discIntro">General reference info, not medical advice. Typical doses in the app are a starting suggestion only and stay editable.</p>
+      <div id="discList"></div>
+    </div>
+  </section>
+
   <!-- MORE -->
   <section id="tab-more" class="tab" hidden>
     <div class="card"><h2>Other health log</h2><div id="hList"></div></div>
@@ -281,9 +290,10 @@
   <button data-tab="deficit"><span>🔥</span>Deficit</button>
   <button data-tab="peptides"><span>💉</span>Doses</button>
   <button data-tab="syringe"><span>📏</span>Syringe</button>
+  <button data-tab="disclaimers"><span>ℹ️</span>Disclaimers</button>
   <button data-tab="more"><span>☰</span>More</button>
 </nav>
 <div id="toast" role="status" aria-live="polite"></div>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -108,8 +108,11 @@ applyTheme();
 
 /* ---------- Tabs ---------- */
 function showTab(name) {
+  if (!document.getElementById('tab-' + name)) name = 'weight';
   $$('.tab').forEach(s => { s.hidden = s.id !== 'tab-' + name; });
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+  const foot = $('.foot');
+  if (foot) foot.hidden = name === 'peptides';
   window.scrollTo(0, 0);
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
 }
@@ -1084,7 +1087,7 @@ on('#pasteItems', 'input', e => {
 $('#pasteSave').addEventListener('click', () => { if (pasteParsed) applyCode(pasteParsed, $('#pasteTarget').value || null); });
 $('#pasteCancel').addEventListener('click', () => { $('#pastePanel').hidden = true; pasteParsed = null; if ($('#pasteItems')) $('#pasteItems').innerHTML = ''; });
 window.HB = { parseHB, makeHB };
-window.HT = { scaleFood, foodByName, foodById, migrateFoodsFromLog, allCatalog, foodKey, defaultAmount, parseHB, makeHB, scaleHBItem, suggestFoods, dataURLtoFile, jpegShareFile, mealShareText, sharePhoto, allPeptides, builtinForPep, ensurePersonalPep, get builtins() { return BUILTIN_FOODS; }, get peptideBuiltins() { return BUILTIN_PEPTIDES; }, get state() { return S; } };
+window.HT = { scaleFood, foodByName, foodById, migrateFoodsFromLog, allCatalog, foodKey, defaultAmount, parseHB, makeHB, scaleHBItem, suggestFoods, dataURLtoFile, jpegShareFile, mealShareText, sharePhoto, allPeptides, builtinForPep, ensurePersonalPep, renderDisclaimers, get builtins() { return BUILTIN_FOODS; }, get peptideBuiltins() { return BUILTIN_PEPTIDES; }, get state() { return S; } };
 
 /* ========== DEFICIT ========== */
 function weightOn(iso) {
@@ -1174,6 +1177,7 @@ function normaliseBuiltinPep(x) {
     doseRange: String(x.doseRange || '').trim(),
     frequency: String(x.frequency || '').trim(),
     evidence: String(x.evidence || '').trim(),
+    disclaimer: String(x.disclaimer || x.evidence || '').trim(),
     route,
     injectable,
     builtin: true,
@@ -1252,9 +1256,19 @@ function refInfoHtml(p) {
     <tr><th>Commonly used for</th><td>${esc(b.use)}</td></tr>
     ${b.doseRange ? `<tr><th>Typical dose</th><td>${esc(b.doseRange)}</td></tr>` : ''}
     ${b.frequency ? `<tr><th>Frequency</th><td>${esc(b.frequency)}</td></tr>` : ''}
-    ${b.evidence ? `<tr><th>Evidence</th><td>${esc(b.evidence)}</td></tr>` : ''}
-  </table>
-  <p class="hint disclaimer">General reference info, not medical advice. Typical values are a starting suggestion only and stay editable.</p>`;
+  </table>`;
+}
+function renderDisclaimers() {
+  const list = $('#discList'); if (!list) return;
+  const items = BUILTIN_PEPTIDES.slice();
+  if (!items.length) {
+    list.innerHTML = '<p class="hint">The peptide list has not loaded yet.</p>';
+    return;
+  }
+  list.innerHTML = items.map(p => {
+    const body = p.disclaimer || p.evidence || '';
+    return `<details><summary>${esc(p.name)}</summary>${body ? `<p>${esc(body)}</p>` : '<p class="hint">No additional notes.</p>'}</details>`;
+  }).join('');
 }
 function renderPeptides() {
   const sel = $('#pSel'); if (!sel) return;
@@ -1566,7 +1580,7 @@ $('#wipeBtn').addEventListener('click', () => {
 });
 
 /* ---------- Boot ---------- */
-function renderAll() { renderBanner(); renderWeight(); renderFood(); renderDeficit(); renderPeptides(); renderSyringe(); renderMore(); }
+function renderAll() { renderBanner(); renderWeight(); renderFood(); renderDeficit(); renderPeptides(); renderSyringe(); renderDisclaimers(); renderMore(); }
 function resetForms() { resetWeightForm(); resetFoodForm(); resetDoseForm(); resetHealthForm(); }
 $('#fDay').value = todayISO();
 function bootHash() {
