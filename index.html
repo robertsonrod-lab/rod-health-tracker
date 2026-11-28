@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
 <header class="top">
@@ -216,7 +216,8 @@
   <section id="tab-syringe" class="tab" hidden>
     <form class="card form" id="sForm">
       <h2>Syringe calculator</h2>
-      <div class="row" id="sPresets"></div>
+      <label>Peptide<select id="sPep" name="pep"></select></label>
+      <p class="hint" id="sPepNote"></p>
       <div class="grid2">
         <label>Peptide in vial (mg)<input type="number" name="vialMg" step="any" inputmode="decimal" value="10"></label>
         <label>Water added (mL)<input type="number" name="water" step="any" inputmode="decimal" value="1"></label>
@@ -229,7 +230,7 @@
       </div>
     </form>
     <div class="card"><div class="metrics" id="sMetrics"></div><div id="sDraw"></div><div id="sWarn"></div>
-      <p class="hint">Premixed 10 mg/mL: 1 mg is 0.1 mL (10 units); 2 mg is 0.2 mL (20 units). Always double-check against your prescriber's instructions.</p></div>
+      <p class="hint">Premixed 10 mg/mL: 1 mg is 0.1 mL (10 units); 2 mg is 0.2 mL (20 units).</p></div>
   </section>
 
   <!-- DISCLAIMERS -->
@@ -294,6 +295,6 @@
   <button data-tab="more"><span>☰</span>More</button>
 </nav>
 <div id="toast" role="status" aria-live="polite"></div>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

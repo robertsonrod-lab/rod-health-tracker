@@ -1087,7 +1087,7 @@ on('#pasteItems', 'input', e => {
 $('#pasteSave').addEventListener('click', () => { if (pasteParsed) applyCode(pasteParsed, $('#pasteTarget').value || null); });
 $('#pasteCancel').addEventListener('click', () => { $('#pastePanel').hidden = true; pasteParsed = null; if ($('#pasteItems')) $('#pasteItems').innerHTML = ''; });
 window.HB = { parseHB, makeHB };
-window.HT = { scaleFood, foodByName, foodById, migrateFoodsFromLog, allCatalog, foodKey, defaultAmount, parseHB, makeHB, scaleHBItem, suggestFoods, dataURLtoFile, jpegShareFile, mealShareText, sharePhoto, allPeptides, builtinForPep, ensurePersonalPep, renderDisclaimers, get builtins() { return BUILTIN_FOODS; }, get peptideBuiltins() { return BUILTIN_PEPTIDES; }, get state() { return S; } };
+window.HT = { scaleFood, foodByName, foodById, migrateFoodsFromLog, allCatalog, foodKey, defaultAmount, parseHB, makeHB, scaleHBItem, suggestFoods, dataURLtoFile, jpegShareFile, mealShareText, sharePhoto, allPeptides, builtinForPep, ensurePersonalPep, renderDisclaimers, applySyringePep, syringeFillOf, get builtins() { return BUILTIN_FOODS; }, get peptideBuiltins() { return BUILTIN_PEPTIDES; }, get state() { return S; } };
 
 /* ========== DEFICIT ========== */
 function weightOn(iso) {
@@ -1426,45 +1426,84 @@ on('#pSchedForm', 'submit', e => {
 });
 
 /* ========== SYRINGE ========== */
-function syringePresets() {
-  const out = [], seen = new Set();
-  function add(p, dose, unit, vialMg, water) {
-    const doseMg = unit === 'mcg' ? dose / 1000 : dose;
-    if (!(doseMg > 0) || !(vialMg > 0)) return;
-    const key = pepKey(p.name) + '|' + doseMg;
-    if (seen.has(key)) return;
-    seen.add(key);
-    const label = unit === 'mcg' ? `${p.name} ${dose} mcg` : `${p.name} ${dose} mg`;
-    out.push({ label, vialMg, water: water > 0 ? water : 1, dose, unit: unit || 'mg' });
+let sSel = null, sFilled = false;
+
+function syringeFillOf(p) {
+  if (!p) return { nasal: false };
+  const b = builtinForPep(p);
+  const nasal = !!(b && b.injectable === false);
+  let vialMg = null, water = null;
+  if (b && b.vialMg > 0) {
+    vialMg = b.vialMg;
+    water = b.waterMl > 0 ? b.waterMl : 1;
   }
-  S.peptides.forEach(p => {
-    const mgs = Array.from(new Set(S.schedule.filter(s => s.peptideId === p.id).map(s => s.mg))).sort((a, b) => a - b);
-    const b = builtinForPep(p);
-    const vialMg = (p.mgPerMl > 0 ? p.mgPerMl : (b && b.vialMg)) || 0;
-    const water = p.mgPerMl > 0 ? 1 : ((b && b.waterMl) || 1);
-    if (mgs.length) mgs.forEach(mg => add(p, mg, 'mg', vialMg, water));
-    else {
-      const t = typicalDoseOf(p);
-      if (t) add(p, t.dose, t.unit, (b && b.vialMg) || vialMg, (b && b.waterMl) || water);
-      else add(p, 1, 'mg', vialMg, water);
+  if (isPersonalPep(p) && p.mgPerMl > 0) {
+    if (vialMg > 0 && water > 0 && Math.abs((vialMg / water) - p.mgPerMl) < 1e-6) {
+      /* keep the typical vial size that already matches the saved concentration */
+    } else {
+      vialMg = p.mgPerMl;
+      water = 1;
     }
-  });
-  BUILTIN_PEPTIDES.forEach(b => {
-    if (!b.injectable || !(b.typicalDose > 0)) return;
-    add(b, b.typicalDose, b.typicalDoseUnit, b.vialMg || b.mgPerMl, b.waterMl || 1);
-  });
-  return out;
+  }
+  const t = typicalDoseOf(p);
+  return {
+    vialMg,
+    water,
+    dose: t && t.dose > 0 ? t.dose : null,
+    unit: t ? t.unit : 'mg',
+    nasal,
+  };
+}
+function updateSyringeNote(p) {
+  const note = $('#sPepNote'); if (!note) return;
+  const fill = syringeFillOf(p);
+  note.textContent = fill.nasal ? 'Usually used as a nasal spray, not drawn in a syringe.' : '';
+}
+function applySyringePep(p) {
+  const f = $('#sForm'); if (!f || !p) return;
+  const fill = syringeFillOf(p);
+  if (fill.vialMg > 0) {
+    f.vialMg.value = fill.vialMg;
+    f.water.value = fill.water > 0 ? fill.water : 1;
+  }
+  if (fill.dose > 0) {
+    f.dose.value = fill.dose;
+    f.unit.value = fill.unit;
+  }
+  updateSyringeNote(p);
+  calcSyringe();
 }
 function renderSyringe() {
-  const f = $('#sForm'), box = $('#sPresets'); if (!f || !box) return;
-  const presets = syringePresets();
-  box.innerHTML = presets.map((p, i) => `<button type="button" class="btn sm" data-preset="${i}">${esc(p.label)}</button>`).join('');
-  box.onclick = e => {
-    const btn = e.target.closest('[data-preset]'); if (!btn) return;
-    const p = presets[btn.dataset.preset]; if (!p) return;
-    f.vialMg.value = p.vialMg; f.water.value = p.water; f.dose.value = p.dose; f.unit.value = p.unit;
-    calcSyringe();
-  };
+  const f = $('#sForm'); if (!f) return;
+  const sel = $('#sPep');
+  if (sel) {
+    const all = allPeptides();
+    const mine = all.filter(isPersonalPep);
+    const extras = all.filter(x => !isPersonalPep(x));
+    let html = '';
+    if (mine.length) html += `<optgroup label="Your peptides">${mine.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</optgroup>`;
+    if (extras.length) html += `<optgroup label="Common peptides">${extras.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</optgroup>`;
+    sel.innerHTML = html || '<option value="">No peptides yet</option>';
+    const pick = all.find(p => p.id === sSel) || (pSel && all.find(p => p.id === pSel)) || all[0] || null;
+    if (pick) {
+      const first = !sFilled;
+      sSel = pick.id;
+      sel.value = pick.id;
+      if (first) { applySyringePep(pick); sFilled = true; }
+      else updateSyringeNote(pick);
+    }
+  } else {
+    /* Older cached HTML still has the preset buttons; keep that path working. */
+    const box = $('#sPresets');
+    if (box) {
+      const all = allPeptides().filter(p => syringeFillOf(p).vialMg > 0);
+      box.innerHTML = all.map((p, i) => `<button type="button" class="btn sm" data-preset="${i}">${esc(p.name)}</button>`).join('');
+      box.onclick = e => {
+        const btn = e.target.closest('[data-preset]'); if (!btn) return;
+        const p = all[btn.dataset.preset]; if (p) applySyringePep(p);
+      };
+    }
+  }
   calcSyringe();
 }
 function calcSyringe() {
@@ -1505,6 +1544,11 @@ function syringeSVG(cap, units) {
   s += `<text x="${x0}" y="${y - 12}" font-size="13" font-weight="700" style="fill:var(--text)">${over ? `Over capacity: ${units.toFixed(1)} units needed` : `Draw to ${fillU.toFixed(1)} units (${(fillU / 100).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} mL)`}</text>`;
   return s + '</svg>';
 }
+on('#sPep', 'change', e => {
+  sSel = e.target.value;
+  const p = allPeptides().find(x => x.id === sSel);
+  if (p) applySyringePep(p);
+});
 on('#sForm', 'input', calcSyringe);
 on('#sForm', 'change', calcSyringe);
 on('#sForm', 'submit', e => e.preventDefault());
