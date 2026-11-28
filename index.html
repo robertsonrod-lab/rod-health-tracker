@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
 <header class="top">
@@ -168,6 +168,7 @@
   <section id="tab-peptides" class="tab" hidden>
     <div class="card">
       <label>Peptide<select id="pSel"></select></label>
+      <p class="hint">Pick a peptide to log a dose. A built-in list of common peptides is included, with typical reference doses you can edit.</p>
       <div id="pInfo"></div>
       <div class="row"><button class="btn" id="pEditBtn" type="button">Edit peptide</button><button class="btn" id="pNewBtn" type="button">New peptide</button></div>
     </div>
@@ -283,6 +284,6 @@
   <button data-tab="more"><span>☰</span>More</button>
 </nav>
 <div id="toast" role="status" aria-live="polite"></div>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

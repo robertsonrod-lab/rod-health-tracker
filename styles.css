@@ -80,3 +80,5 @@ label.check input{width:auto;min-height:0}
 #fLiveCal{font-weight:600;color:var(--text)}
 .paste-item{align-items:center}
 .paste-item .qtybox{flex:0 0 170px;min-width:150px}
+#pInfo .disclaimer{margin-top:8px}
+#sPresets{flex-wrap:wrap;margin-bottom:10px}

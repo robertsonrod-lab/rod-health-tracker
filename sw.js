@@ -1,5 +1,5 @@
-const CACHE = 'health-tracker-v5';
-const ASSETS = ['./', 'index.html', 'styles.css?v=5', 'app.js?v=5', 'foods.json', 'manifest.json',
+const CACHE = 'health-tracker-v6';
+const ASSETS = ['./', 'index.html', 'styles.css?v=6', 'app.js?v=6', 'foods.json', 'peptides.json', 'manifest.json',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -14,7 +14,7 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   const path = new URL(req.url).pathname;
   const base = path.slice(path.lastIndexOf('/') + 1) || 'index.html';
-  const networkFirst = req.mode === 'navigate' || base === 'index.html' || base === 'app.js' || base === 'styles.css' || base === 'foods.json' || base === 'sw.js';
+  const networkFirst = req.mode === 'navigate' || base === 'index.html' || base === 'app.js' || base === 'styles.css' || base === 'foods.json' || base === 'peptides.json' || base === 'sw.js';
   if (networkFirst) {
     e.respondWith(fetch(req).then(r => {
       if (r.ok) {
